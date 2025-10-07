@@ -4,20 +4,37 @@ import { useEffect, useRef, useState } from 'react';
 
 export default function App() {
   const [showMainPage, setShowMainPage] = useState(false);
-  const breathingAnim = useRef(new Animated.Value(0.3)).current;
+  const breathingAnim = useRef(new Animated.Value(0.75)).current;
+  const fadeAnim = useRef(new Animated.Value(1)).current;
+  const logoFadeAnim = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
-    // Start breathing animation
+    // Start combined breathing animation (subtle scale + fade)
     const breathingAnimation = Animated.loop(
       Animated.sequence([
-        Animated.timing(breathingAnim, {
-          toValue: 1.2,
+        // Scale up and fade in (subtle growth)
+        Animated.parallel([
+          Animated.timing(breathingAnim, {
+            toValue: 1.08,
+            duration: 2000,
+            useNativeDriver: true,
+          }),
+          Animated.timing(logoFadeAnim, {
+            toValue: 1,
+            duration: 2000,
+            useNativeDriver: true,
+          }),
+        ]),
+        // Keep size, fade out
+        Animated.timing(logoFadeAnim, {
+          toValue: 0,
           duration: 1500,
           useNativeDriver: true,
         }),
+        // Reset scale for next cycle
         Animated.timing(breathingAnim, {
-          toValue: 0.8,
-          duration: 1500,
+          toValue: 0.75,
+          duration: 100,
           useNativeDriver: true,
         }),
       ])
@@ -25,10 +42,17 @@ export default function App() {
 
     breathingAnimation.start();
 
-    // Show main page after 0.8 seconds
+    // Show main page after 1.5 seconds with fade transition
     const timer = setTimeout(() => {
-      setShowMainPage(true);
-    }, 800);
+      Animated.timing(fadeAnim, {
+        toValue: 0,
+        duration: 500,
+        useNativeDriver: true,
+      }).start(() => {
+        setShowMainPage(true);
+        fadeAnim.setValue(1);
+      });
+    }, 1500);
 
     return () => {
       breathingAnimation.stop();
@@ -38,26 +62,27 @@ export default function App() {
 
   if (showMainPage) {
     return (
-      <View style={styles.mainContainer}>
+      <Animated.View style={[styles.mainContainer, { opacity: fadeAnim }]}>
         <Text style={styles.helloText}>hello!</Text>
         <StatusBar style="dark" />
-      </View>
+      </Animated.View>
     );
   }
 
   return (
-    <View style={styles.loadingContainer}>
+    <Animated.View style={[styles.loadingContainer, { opacity: fadeAnim }]}>
       <Animated.Image
         source={require('./assets/itufklogo.png')}
         style={[
           styles.logo,
           {
+            opacity: logoFadeAnim,
             transform: [{ scale: breathingAnim }],
           },
         ]}
       />
       <StatusBar style="auto" />
-    </View>
+    </Animated.View>
   );
 }
 
@@ -67,12 +92,16 @@ const styles = StyleSheet.create({
     backgroundColor: '#fff',
     alignItems: 'center',
     justifyContent: 'center',
+    borderWidth: 3,
+    borderColor: '#000',
   },
   mainContainer: {
     flex: 1,
     backgroundColor: '#fff',
     alignItems: 'center',
     justifyContent: 'center',
+    borderWidth: 3,
+    borderColor: '#000',
   },
   logo: {
     width: 150,
