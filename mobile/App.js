@@ -1,5 +1,5 @@
 import { StatusBar } from 'expo-status-bar';
-import { StyleSheet, Text, View, Image, Animated, TouchableOpacity, Dimensions, SafeAreaView, Platform, StatusBar as RNStatusBar, ScrollView, TextInput } from 'react-native';
+import { StyleSheet, Text, View, Image, Animated, TouchableOpacity, Dimensions, SafeAreaView, Platform, StatusBar as RNStatusBar, ScrollView, TextInput, BackHandler } from 'react-native';
 import { useEffect, useRef, useState } from 'react';
 import * as Font from 'expo-font';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -14,7 +14,7 @@ export default function App() {
   const [showMainPage, setShowMainPage] = useState(false);
   const [fontsLoaded, setFontsLoaded] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
-  const [currentPage, setCurrentPage] = useState('dashboard'); // dashboard, notifications, events, messages, settings, calendar, profile, messageDetail, messageCreate, eventCreate
+  const [currentPage, setCurrentPage] = useState('dashboard'); // dashboard, notifications, events, messages, settings, calendar, profile, messageDetail, messageCreate, eventCreate, eventDetail, eventEdit
   const [showCaptainOnly, setShowCaptainOnly] = useState(false);
   const [showPastEvents, setShowPastEvents] = useState(false);
   const [showTaggedOnly, setShowTaggedOnly] = useState(false);
@@ -23,10 +23,38 @@ export default function App() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [notificationsDropdownOpen, setNotificationsDropdownOpen] = useState(false);
   const [selectedMessage, setSelectedMessage] = useState(null);
+  const [selectedEvent, setSelectedEvent] = useState(null);
+  const [currentMonth, setCurrentMonth] = useState(() => {
+    const today = new Date();
+    return new Date(today.getFullYear(), today.getMonth(), 1);
+  });
+  const [selectedDate, setSelectedDate] = useState(null);
+  const [eventName, setEventName] = useState('');
+  const [eventDate, setEventDate] = useState(null);
+  const [eventCaptain, setEventCaptain] = useState('');
+  const [eventBackupCaptain, setEventBackupCaptain] = useState('');
+  const [showDatePicker, setShowDatePicker] = useState(false);
+  const [eventNameError, setEventNameError] = useState(false);
+  const [showEditDatePicker, setShowEditDatePicker] = useState(false);
+  const [editEventDate, setEditEventDate] = useState(null);
+  const [showConfirmDialog, setShowConfirmDialog] = useState(false);
+  const [confirmDialogData, setConfirmDialogData] = useState({ type: '', message: '' });
+  const [showCreateEventPrompt, setShowCreateEventPrompt] = useState(false);
+  const [createEventPromptDate, setCreateEventPromptDate] = useState(null);
   const breathingAnim = useRef(new Animated.Value(0.75)).current;
   const fadeAnim = useRef(new Animated.Value(1)).current;
   const logoFadeAnim = useRef(new Animated.Value(0)).current;
   const menuSlideAnim = useRef(new Animated.Value(-SCREEN_WIDTH * 0.75)).current;
+
+  // Centralized events data
+  const eventsData = [
+    { id: 1, date: '2025-10-12', name: 'Tanışma Toplantısı', time: '14:00', location: 'İTÜ Merkez Kampüs', text: 'Yeni üyelerimizle tanışma ve kaynaşma toplantısı. Kulüp hakkında genel bilgiler verilecek ve dönem planları paylaşılacak.', color: '#6B8E9E', hasImage: true, captain: 'Ahmet', coCaptain: 'Zeynep' },
+    { id: 2, date: '2025-10-17', name: 'Kadıköy Gezisi', time: '10:00', location: 'Kadıköy Rıhtım', text: 'Sokak fotoğrafçılığı pratiği için Kadıköy gezisi. Sabah erken saatlerde buluşup akşam üzeri sona erecek.', color: '#8B7355', hasImage: true, captain: 'Mert', coCaptain: 'Emre' },
+    { id: 3, date: '2025-10-25', name: 'Teknik Eğitim 102', time: '16:00', location: 'İTÜ Fotoğraf Kulübü', text: 'Kompozisyon teknikleri ve ışık kullanımı üzerine detaylı eğitim. Temel seviye bilgi gerektirir.', color: '#7A8B99', hasImage: true, captain: 'Selin', coCaptain: 'Mert' },
+    { id: 4, date: '2025-11-02', name: 'Portre Çekimi Workshop', time: '13:00', location: 'İTÜ Stüdyo', text: 'Profesyonel portre fotoğrafçılığı teknikleri workshop. Stüdyo ekipmanları kullanımı öğretilecek.', color: '#9B8B7E', hasImage: true, captain: 'Elif' },
+    { id: 5, date: '2025-11-08', name: 'Gece Fotoğrafçılığı', time: '20:00', location: 'Ortaköy Sahil', text: 'Uzun pozlama ve gece fotoğrafçılığı pratiği. Tripod getirmek zorunludur.', color: '#5A6B7A', hasImage: true, captain: 'Mert' },
+    { id: 6, date: '2025-11-15', name: 'Botanik Gezisi', captain: 'Ayşe', hasImage: false },
+  ];
 
   useEffect(() => {
     // Load custom fonts
@@ -120,6 +148,58 @@ export default function App() {
     setCurrentPage(page);
   };
 
+  const handleConfirmDialogAction = () => {
+    setShowConfirmDialog(false);
+    
+    switch (confirmDialogData.type) {
+      case 'saveChanges':
+        // Save changes logic here
+        navigateToPage('eventDetail');
+        break;
+      case 'deleteFromEdit':
+        // Delete event logic here
+        navigateToPage('events');
+        break;
+      case 'deleteFromDetail':
+        // Delete event logic here
+        navigateToPage('events');
+        break;
+      default:
+        break;
+    }
+  };
+
+  const handleCreateEventFromCalendar = () => {
+    setEventDate(createEventPromptDate);
+    setShowCreateEventPrompt(false);
+    navigateToPage('eventCreate');
+  };
+
+  const handleBackPress = () => {
+    // Define navigation hierarchy
+    const navigationMap = {
+      'messageDetail': 'messages',
+      'messageCreate': 'messages',
+      'eventCreate': 'events',
+      'eventDetail': 'events',
+      'eventEdit': 'eventDetail',
+    };
+    
+    const previousPage = navigationMap[currentPage];
+    if (previousPage) {
+      setCurrentPage(previousPage);
+      return true; // Prevent default behavior (exit app)
+    }
+    return false; // Allow default behavior for main pages
+  };
+
+  // Handle Android back button
+  useEffect(() => {
+    const backHandler = BackHandler.addEventListener('hardwareBackPress', handleBackPress);
+    
+    return () => backHandler.remove();
+  }, [currentPage]);
+
   const renderPageContent = () => {
     switch (currentPage) {
       case 'dashboard':
@@ -142,6 +222,10 @@ export default function App() {
         return renderMessageCreate();
       case 'eventCreate':
         return renderEventCreate();
+      case 'eventDetail':
+        return renderEventDetail();
+      case 'eventEdit':
+        return renderEventEdit();
       default:
         return renderDashboard();
     }
@@ -163,7 +247,13 @@ export default function App() {
       <View style={styles.dateSectionRow}>
         <View style={styles.dateSection}>
           <Text style={styles.dateLabel}>Tarih:</Text>
-          <Text style={styles.dateValue}>9 Ekim 2025</Text>
+          <Text style={styles.dateValue}>
+            {(() => {
+              const today = new Date();
+              const monthNames = ['Ocak', 'Şubat', 'Mart', 'Nisan', 'Mayıs', 'Haziran', 'Temmuz', 'Ağustos', 'Eylül', 'Ekim', 'Kasım', 'Aralık'];
+              return `${today.getDate()} ${monthNames[today.getMonth()]} ${today.getFullYear()}`;
+            })()}
+          </Text>
         </View>
         <TouchableOpacity style={styles.calendarButton} onPress={() => navigateToPage('calendar')}>
           <Text style={styles.calendarButtonText}>Takvime git</Text>
@@ -254,7 +344,13 @@ export default function App() {
           </TouchableOpacity>
         </View>
         
-        <View style={styles.messageCard}>
+        <TouchableOpacity 
+          style={styles.messageCard}
+          onPress={() => {
+            setSelectedMessage({id: 1, sender: 'Ayşe', title: 'Gelecek hafta için ekipman kontrolü'});
+            navigateToPage('messageDetail');
+          }}
+        >
           <View style={styles.messageHeader}>
             <View style={[styles.userAvatar, { backgroundColor: '#FF6B6B' }]}>
               <Text style={styles.avatarInitial}>A</Text>
@@ -273,9 +369,15 @@ export default function App() {
           <View style={styles.messageFooter}>
             <Text style={styles.replyCount}>💬 12 yanıt</Text>
           </View>
-        </View>
+        </TouchableOpacity>
 
-        <View style={styles.messageCard}>
+        <TouchableOpacity 
+          style={styles.messageCard}
+          onPress={() => {
+            setSelectedMessage({id: 2, sender: 'Emre', title: 'Fotoğraf yarışması başvuruları'});
+            navigateToPage('messageDetail');
+          }}
+        >
           <View style={styles.messageHeader}>
             <View style={[styles.userAvatar, { backgroundColor: '#4ECDC4' }]}>
               <Text style={styles.avatarInitial}>E</Text>
@@ -294,9 +396,15 @@ export default function App() {
           <View style={styles.messageFooter}>
             <Text style={styles.replyCount}>💬 8 yanıt</Text>
           </View>
-        </View>
+        </TouchableOpacity>
 
-        <View style={styles.messageCard}>
+        <TouchableOpacity 
+          style={styles.messageCard}
+          onPress={() => {
+            setSelectedMessage({id: 3, sender: 'Zeynep', title: 'Lightroom eğitimi kaydı'});
+            navigateToPage('messageDetail');
+          }}
+        >
           <View style={styles.messageHeader}>
             <View style={[styles.userAvatar, { backgroundColor: '#95E1D3' }]}>
               <Text style={styles.avatarInitial}>Z</Text>
@@ -315,7 +423,7 @@ export default function App() {
           <View style={styles.messageFooter}>
             <Text style={styles.replyCount}>💬 25 yanıt</Text>
           </View>
-        </View>
+        </TouchableOpacity>
       </View>
     </ScrollView>
   );
@@ -435,129 +543,103 @@ export default function App() {
         </View>
 
         {/* Event Cards */}
-        <TouchableOpacity style={[styles.eventCardLarge, { backgroundColor: '#6B8E9E' }]}>
-          <View style={styles.imageWrapper}>
-            <Image 
-              source={require('./assets/placeholder_tanisma_toplantisi.jpg')} 
-              style={styles.eventImage}
-            />
-          </View>
-          <LinearGradient
-            colors={['#6B8E9E', '#6B8E9E', 'rgba(107,142,158,0.8)', 'rgba(107,142,158,0.6)', 'rgba(107,142,158,0.3)', 'rgba(107,142,158,0)']}
-            locations={[0, 0.3, 0.5, 0.7, 0.85, 1]}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 0 }}
-            style={styles.imageOpacityMask}
-          />
-          <View style={styles.eventContentLarge}>
-            <Text style={styles.eventNameLarge}>Tanışma Toplantısı</Text>
-            <Text style={styles.eventDateTime}>12 Ekim Pazar • 14:00</Text>
-            <View style={styles.announcementBadgeInline}>
-              <Text style={styles.announcementBadgeInlineText}>✓ Duyuru yapıldı</Text>
-            </View>
-          </View>
-        </TouchableOpacity>
-
-        <TouchableOpacity style={[styles.eventCardLarge, { backgroundColor: '#8B7355' }]}>
-          <View style={styles.imageWrapper}>
-            <Image 
-              source={require('./assets/placeholder_kadikoy_gezisi.jpg')} 
-              style={styles.eventImage}
-            />
-          </View>
-          <LinearGradient
-            colors={['#8B7355', '#8B7355', 'rgba(139,115,85,0.8)', 'rgba(139,115,85,0.6)', 'rgba(139,115,85,0.3)', 'rgba(139,115,85,0)']}
-            locations={[0, 0.3, 0.5, 0.7, 0.85, 1]}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 0 }}
-            style={styles.imageOpacityMask}
-          />
-          <View style={styles.eventContentLarge}>
-            <Text style={styles.eventNameLarge}>Kadıköy Gezisi</Text>
-            <Text style={styles.eventDateTime}>17 Ekim Cuma • 10:00</Text>
-            <View style={styles.captainBadge}>
-              <Text style={styles.captainText}>Bu etkinlikte kaptansın! ⚡</Text>
-            </View>
-            <View style={styles.announcementBadgeWarningInline}>
-              <Text style={styles.announcementBadgeWarningInlineText}>⚠ Duyuru yapılmadı</Text>
-            </View>
-          </View>
-        </TouchableOpacity>
-
-        <TouchableOpacity style={[styles.eventCardLarge, { backgroundColor: '#7A8B99' }]}>
-          <View style={styles.imageWrapper}>
-            <Image 
-              source={require('./assets/placeholder_teknik_egitim_102.jpg')} 
-              style={styles.eventImage}
-            />
-          </View>
-          <LinearGradient
-            colors={['#7A8B99', '#7A8B99', 'rgba(122,139,153,0.8)', 'rgba(122,139,153,0.6)', 'rgba(122,139,153,0.3)', 'rgba(122,139,153,0)']}
-            locations={[0, 0.3, 0.5, 0.7, 0.85, 1]}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 0 }}
-            style={styles.imageOpacityMask}
-          />
-          <View style={styles.eventContentLarge}>
-            <Text style={styles.eventNameLarge}>Teknik Eğitim 102</Text>
-            <Text style={styles.eventDateTime}>25 Ekim Cumartesi • 16:00</Text>
-            <View style={styles.backupCaptainBadge}>
-              <Text style={styles.backupCaptainText}>Yedek kaptansın 🔄</Text>
-            </View>
-            <View style={styles.announcementBadgeInline}>
-              <Text style={styles.announcementBadgeInlineText}>✓ Duyuru yapıldı</Text>
-            </View>
-          </View>
-        </TouchableOpacity>
-
-        <TouchableOpacity style={[styles.eventCardLarge, { backgroundColor: '#9B8B7E' }]}>
-          <View style={styles.imageWrapper}>
-            <Image 
-              source={require('./assets/placeholder_tanisma_toplantisi.jpg')} 
-              style={styles.eventImage}
-            />
-          </View>
-          <LinearGradient
-            colors={['#9B8B7E', '#9B8B7E', 'rgba(155,139,126,0.8)', 'rgba(155,139,126,0.6)', 'rgba(155,139,126,0.3)', 'rgba(155,139,126,0)']}
-            locations={[0, 0.3, 0.5, 0.7, 0.85, 1]}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 0 }}
-            style={styles.imageOpacityMask}
-          />
-          <View style={styles.eventContentLarge}>
-            <Text style={styles.eventNameLarge}>Portre Çekimi Workshop</Text>
-            <Text style={styles.eventDateTime}>2 Kasım Pazar • 13:00</Text>
-            <View style={styles.announcementBadgeInline}>
-              <Text style={styles.announcementBadgeInlineText}>✓ Duyuru yapıldı</Text>
-            </View>
-          </View>
-        </TouchableOpacity>
-
-        <TouchableOpacity style={[styles.eventCardLarge, { backgroundColor: '#5A6B7A' }]}>
-          <View style={styles.imageWrapper}>
-            <Image 
-              source={require('./assets/placeholder_kadikoy_gezisi.jpg')} 
-              style={styles.eventImage}
-            />
-          </View>
-          <LinearGradient
-            colors={['#5A6B7A', '#5A6B7A', 'rgba(90,107,122,0.8)', 'rgba(90,107,122,0.6)', 'rgba(90,107,122,0.3)', 'rgba(90,107,122,0)']}
-            locations={[0, 0.3, 0.5, 0.7, 0.85, 1]}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 0 }}
-            style={styles.imageOpacityMask}
-          />
-          <View style={styles.eventContentLarge}>
-            <Text style={styles.eventNameLarge}>Gece Fotoğrafçılığı</Text>
-            <Text style={styles.eventDateTime}>8 Kasım Cumartesi • 20:00</Text>
-            <View style={styles.captainBadge}>
-              <Text style={styles.captainText}>Bu etkinlikte kaptansın! ⚡</Text>
-            </View>
-            <View style={styles.announcementBadgeInline}>
-              <Text style={styles.announcementBadgeInlineText}>✓ Duyuru yapıldı</Text>
-            </View>
-          </View>
-        </TouchableOpacity>
+        {eventsData.map((event) => {
+          const eventDate = event.date ? new Date(event.date) : null;
+          const today = new Date();
+          today.setHours(0, 0, 0, 0); // Reset time to start of day for accurate comparison
+          const isPastEvent = eventDate ? eventDate < today : false;
+          
+          // Filter out past events if showPastEvents is false
+          if (isPastEvent && !showPastEvents) {
+            return null;
+          }
+          
+          const dayNames = ['Pazar', 'Pazartesi', 'Salı', 'Çarşamba', 'Perşembe', 'Cuma', 'Cumartesi'];
+          const monthNames = ['Ocak', 'Şubat', 'Mart', 'Nisan', 'Mayıs', 'Haziran', 'Temmuz', 'Ağustos', 'Eylül', 'Ekim', 'Kasım', 'Aralık'];
+          
+          return (
+            <TouchableOpacity 
+              key={event.id}
+              style={[
+                styles.eventCardLarge, 
+                { backgroundColor: event.hasImage ? event.color : '#999' },
+                isPastEvent && { opacity: 0.25 }
+              ]}
+              onPress={() => {
+                setSelectedEvent(event);
+                navigateToPage('eventDetail');
+              }}
+            >
+              {event.hasImage && (
+                <>
+                  <View style={styles.imageWrapper}>
+                    <Image 
+                      source={require('./assets/placeholder_tanisma_toplantisi.jpg')} 
+                      style={styles.eventImage}
+                    />
+                  </View>
+                  <LinearGradient
+                    colors={[
+                      event.color, 
+                      event.color, 
+                      `${event.color}CC`, 
+                      `${event.color}99`, 
+                      `${event.color}4D`, 
+                      `${event.color}00`
+                    ]}
+                    locations={[0, 0.3, 0.5, 0.7, 0.85, 1]}
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 1, y: 0 }}
+                    style={styles.imageOpacityMask}
+                  />
+                </>
+              )}
+              {isPastEvent && (
+                <View style={styles.pastEventWhiteOverlay} />
+              )}
+              <View style={styles.eventContentLarge}>
+                <Text style={styles.eventNameLarge}>{event.name}</Text>
+                {eventDate && event.time ? (
+                  <Text style={styles.eventDateTime}>
+                    {eventDate.getDate()} {monthNames[eventDate.getMonth()]} {dayNames[eventDate.getDay()]} • {event.time}
+                  </Text>
+                ) : eventDate ? (
+                  <Text style={styles.eventDateTime}>
+                    {eventDate.getDate()} {monthNames[eventDate.getMonth()]} {dayNames[eventDate.getDay()]}
+                  </Text>
+                ) : (
+                  <Text style={styles.eventDateTime}>Tarih belirlenmedi</Text>
+                )}
+                {event.captain && (
+                  <View style={styles.captainBadge}>
+                    <Text style={styles.captainText}>Kaptan: {event.captain}</Text>
+                  </View>
+                )}
+                {event.isCaptain && (
+                  <View style={styles.captainBadge}>
+                    <Text style={styles.captainText}>Bu etkinlikte kaptansın! ⚡</Text>
+                  </View>
+                )}
+                {event.isBackupCaptain && (
+                  <View style={styles.backupCaptainBadge}>
+                    <Text style={styles.backupCaptainText}>Yedek kaptansın 🔄</Text>
+                  </View>
+                )}
+                {event.announced !== undefined && (
+                  event.announced ? (
+                    <View style={styles.announcementBadgeInline}>
+                      <Text style={styles.announcementBadgeInlineText}>✓ Duyuru yapıldı</Text>
+                    </View>
+                  ) : (
+                    <View style={styles.announcementBadgeWarningInline}>
+                      <Text style={styles.announcementBadgeWarningInlineText}>⚠ Duyuru yapılmadı</Text>
+                    </View>
+                  )
+                )}
+              </View>
+            </TouchableOpacity>
+          );
+        })}
       </ScrollView>
     );
   };
@@ -776,20 +858,149 @@ export default function App() {
     );
   };
 
-  const renderCalendar = () => (
-    <ScrollView 
-      style={styles.dashboardScrollView}
-      contentContainerStyle={styles.dashboardContent}
-      showsVerticalScrollIndicator={false}
-    >
-      <Text style={styles.pageTitle}>Takvim</Text>
+  const renderCalendar = () => {
+    const monthNames = ['Ocak', 'Şubat', 'Mart', 'Nisan', 'Mayıs', 'Haziran', 'Temmuz', 'Ağustos', 'Eylül', 'Ekim', 'Kasım', 'Aralık'];
+    const dayNames = ['Pzt', 'Sal', 'Çar', 'Per', 'Cum', 'Cmt', 'Paz'];
+
+    const getDaysInMonth = (date) => {
+      const year = date.getFullYear();
+      const month = date.getMonth();
+      const firstDay = new Date(year, month, 1);
+      const lastDay = new Date(year, month + 1, 0);
+      const daysInMonth = lastDay.getDate();
+      const startingDayOfWeek = (firstDay.getDay() + 6) % 7; // Monday = 0
+
+      const days = [];
       
-      <View style={styles.calendarPlaceholder}>
-        <Text style={styles.calendarPlaceholderText}>📅</Text>
-        <Text style={styles.calendarPlaceholderSubtext}>Takvim özelliği yakında eklenecek</Text>
+      // Add empty cells for days before the first day of month
+      for (let i = 0; i < startingDayOfWeek; i++) {
+        days.push(null);
+      }
+      
+      // Add all days of the month
+      for (let day = 1; day <= daysInMonth; day++) {
+        days.push(day);
+      }
+      
+      return days;
+    };
+
+    const getEventsForDate = (date) => {
+      if (!date) return [];
+      const dateStr = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+      return eventsData.filter(event => event.date === dateStr);
+    };
+
+    const getEventForDay = (day) => {
+      if (!day) return null;
+      const date = new Date(currentMonth.getFullYear(), currentMonth.getMonth(), day);
+      const dayEvents = getEventsForDate(date);
+      return dayEvents.length > 0 ? dayEvents[0] : null;
+    };
+
+    const goToPreviousMonth = () => {
+      setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() - 1, 1));
+    };
+
+    const goToNextMonth = () => {
+      setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 1));
+    };
+
+    const handleDayPress = (day) => {
+      if (day) {
+        const date = new Date(currentMonth.getFullYear(), currentMonth.getMonth(), day);
+        const dayEvents = getEventsForDate(date);
+        if (dayEvents.length > 0) {
+          setSelectedEvent(dayEvents[0]);
+          navigateToPage('eventDetail');
+        } else {
+          // Show create event prompt for empty day
+          setCreateEventPromptDate(date);
+          setShowCreateEventPrompt(true);
+        }
+      }
+    };
+
+    const isToday = (day) => {
+      if (!day) return false;
+      const today = new Date();
+      const date = new Date(currentMonth.getFullYear(), currentMonth.getMonth(), day);
+      return date.toDateString() === today.toDateString();
+    };
+
+    const days = getDaysInMonth(currentMonth);
+
+    return (
+      <View style={styles.calendarFullScreen}>
+        <Text style={styles.pageTitle}>Takvim</Text>
+        
+        {/* Calendar Header - Month Navigation */}
+        <View style={styles.calendarHeader}>
+          <TouchableOpacity onPress={goToPreviousMonth} style={styles.calendarNavButton}>
+            <Text style={styles.calendarNavButtonText}>‹</Text>
+          </TouchableOpacity>
+          <Text style={styles.calendarMonthYear}>
+            {monthNames[currentMonth.getMonth()]} {currentMonth.getFullYear()}
+          </Text>
+          <TouchableOpacity onPress={goToNextMonth} style={styles.calendarNavButton}>
+            <Text style={styles.calendarNavButtonText}>›</Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* Calendar Grid - Full Screen */}
+        <View style={styles.calendarContainerFull}>
+          {/* Day Names Header */}
+          <View style={styles.calendarDayNamesRow}>
+            {dayNames.map((dayName, index) => (
+              <View key={index} style={styles.calendarDayNameCell}>
+                <Text style={styles.calendarDayNameText}>{dayName}</Text>
+              </View>
+            ))}
+          </View>
+
+          {/* Calendar Days Grid */}
+          <View style={styles.calendarDaysGridFull}>
+            {days.map((day, index) => {
+              const event = getEventForDay(day);
+              const eventColor = event ? (event.hasImage ? event.color : '#999') : null;
+              return (
+                <TouchableOpacity
+                  key={index}
+                  style={[
+                    styles.calendarDayCellFull,
+                    !day && styles.calendarDayCellEmpty,
+                    event && { backgroundColor: eventColor },
+                  ]}
+                  onPress={() => handleDayPress(day)}
+                  disabled={!day}
+                >
+                  {day ? (
+                    <View style={styles.calendarDayCellContentFull}>
+                      <Text style={[
+                        styles.calendarDayTextFull,
+                        event && styles.calendarDayTextWithEvent,
+                        isToday(day) && styles.calendarDayTextTodayBold,
+                      ]}>
+                        {day}
+                      </Text>
+                      {event && (
+                        <Text style={styles.calendarEventNameInCell} numberOfLines={2}>
+                          {event.name}
+                        </Text>
+                      )}
+                      {isToday(day) && !event && (
+                        <View style={styles.todayIndicator} />
+                      )}
+                    </View>
+                  ) : null}
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        </View>
       </View>
-    </ScrollView>
-  );
+    );
+  };
 
   const renderProfile = () => (
     <ScrollView 
@@ -864,14 +1075,6 @@ export default function App() {
       contentContainerStyle={styles.dashboardContent}
       showsVerticalScrollIndicator={false}
     >
-      <TouchableOpacity 
-        style={styles.backButton}
-        onPress={() => navigateToPage('messages')}
-      >
-        <Image source={require('./assets/back.png')} style={styles.backIcon} />
-        <Text style={styles.backText}>Geri</Text>
-      </TouchableOpacity>
-
       <View style={styles.messageDetailCard}>
         <View style={styles.messageHeader}>
           <View style={[styles.userAvatar, { backgroundColor: '#FF6B6B' }]}>
@@ -953,14 +1156,6 @@ export default function App() {
       contentContainerStyle={styles.dashboardContent}
       showsVerticalScrollIndicator={false}
     >
-      <TouchableOpacity 
-        style={styles.backButton}
-        onPress={() => navigateToPage('messages')}
-      >
-        <Image source={require('./assets/back.png')} style={styles.backIcon} />
-        <Text style={styles.backText}>Geri</Text>
-      </TouchableOpacity>
-
       <Text style={styles.pageTitle}>Yeni Mesaj</Text>
 
       <View style={styles.createFormSection}>
@@ -1001,99 +1196,450 @@ export default function App() {
     </ScrollView>
   );
 
-  const renderEventCreate = () => (
-    <ScrollView 
-      style={styles.dashboardScrollView}
-      contentContainerStyle={styles.dashboardContent}
-      showsVerticalScrollIndicator={false}
-    >
-      <TouchableOpacity 
-        style={styles.backButton}
-        onPress={() => navigateToPage('events')}
+  const renderEventCreate = () => {
+    const handleCreateEvent = () => {
+      if (!eventName.trim()) {
+        setEventNameError(true);
+        return;
+      }
+      // Here you would create the event
+      // For now, just reset form and navigate back
+      setEventName('');
+      setEventDate(null);
+      setEventCaptain('');
+      setEventBackupCaptain('');
+      setEventNameError(false);
+      navigateToPage('events');
+    };
+
+    const formatDate = (date) => {
+      if (!date) return '';
+      const monthNames = ['Ocak', 'Şubat', 'Mart', 'Nisan', 'Mayıs', 'Haziran', 'Temmuz', 'Ağustos', 'Eylül', 'Ekim', 'Kasım', 'Aralık'];
+      return `${date.getDate()} ${monthNames[date.getMonth()]} ${date.getFullYear()}`;
+    };
+
+    return (
+      <View style={{ flex: 1 }}>
+        <ScrollView 
+          style={styles.dashboardScrollView}
+          contentContainerStyle={styles.dashboardContent}
+          showsVerticalScrollIndicator={false}
+        >
+          <Text style={styles.pageTitle}>Yeni Etkinlik</Text>
+
+          <View style={styles.createFormSection}>
+            <Text style={styles.formLabel}>Etkinlik Adı</Text>
+            <TextInput
+              style={[
+                styles.formInput,
+                eventNameError && styles.formInputError
+              ]}
+              placeholder="Etkinlik adı"
+              placeholderTextColor="#999"
+              value={eventName}
+              onChangeText={(text) => {
+                setEventName(text);
+                if (text.trim()) setEventNameError(false);
+              }}
+            />
+            {eventNameError && (
+              <Text style={styles.formErrorText}>Etkinlik adı zorunludur</Text>
+            )}
+          </View>
+
+          <View style={styles.createFormSection}>
+            <Text style={styles.formLabel}>Tarih</Text>
+            <TouchableOpacity 
+              style={styles.formInput}
+              onPress={() => setShowDatePicker(true)}
+            >
+              <Text style={eventDate ? styles.datePickerText : styles.datePickerPlaceholder}>
+                {eventDate ? formatDate(eventDate) : 'Tarih seç'}
+              </Text>
+            </TouchableOpacity>
+          </View>
+
+          <View style={styles.createFormSection}>
+            <Text style={styles.formLabel}>Kaptan</Text>
+            <TextInput
+              style={styles.formInput}
+              placeholder="Kaptan adı"
+              placeholderTextColor="#999"
+              value={eventCaptain}
+              onChangeText={setEventCaptain}
+            />
+          </View>
+
+          <View style={styles.createFormSection}>
+            <Text style={styles.formLabel}>Yedek Kaptan</Text>
+            <TextInput
+              style={styles.formInput}
+              placeholder="Yedek kaptan adı"
+              placeholderTextColor="#999"
+              value={eventBackupCaptain}
+              onChangeText={setEventBackupCaptain}
+            />
+          </View>
+
+          <View style={styles.eventCreateNote}>
+            <Text style={styles.eventCreateNoteText}>
+              💡 Etkinlik detayları (saat, konum, açıklama, resim) daha sonra düzenlenebilir.
+            </Text>
+          </View>
+
+          <TouchableOpacity style={styles.submitButton} onPress={handleCreateEvent}>
+            <Text style={styles.submitButtonText}>Etkinliği Oluştur</Text>
+          </TouchableOpacity>
+        </ScrollView>
+
+        {/* Date Picker Modal */}
+        {showDatePicker && (
+          <View style={styles.datePickerOverlay}>
+            <TouchableOpacity 
+              style={styles.datePickerBackdrop}
+              activeOpacity={1}
+              onPress={() => setShowDatePicker(false)}
+            />
+            <View style={styles.datePickerModal}>
+              <View style={styles.datePickerHeader}>
+                <Text style={styles.datePickerTitle}>Tarih Seç</Text>
+                <TouchableOpacity onPress={() => setShowDatePicker(false)}>
+                  <Image source={require('./assets/close.png')} style={styles.datePickerCloseIcon} />
+                </TouchableOpacity>
+              </View>
+              <ScrollView style={styles.datePickerCalendar}>
+                {/* Simple date selection - next 60 days */}
+                {Array.from({ length: 60 }, (_, i) => {
+                  const date = new Date();
+                  date.setDate(date.getDate() + i);
+                  return date;
+                }).map((date, index) => {
+                  const isSelected = eventDate && date.toDateString() === eventDate.toDateString();
+                  const dayNames = ['Pazar', 'Pazartesi', 'Salı', 'Çarşamba', 'Perşembe', 'Cuma', 'Cumartesi'];
+                  const monthNames = ['Ocak', 'Şubat', 'Mart', 'Nisan', 'Mayıs', 'Haziran', 'Temmuz', 'Ağustos', 'Eylül', 'Ekim', 'Kasım', 'Aralık'];
+                  
+                  return (
+                    <TouchableOpacity
+                      key={index}
+                      style={[
+                        styles.datePickerOption,
+                        isSelected && styles.datePickerOptionSelected
+                      ]}
+                      onPress={() => {
+                        setEventDate(date);
+                        setShowDatePicker(false);
+                      }}
+                    >
+                      <Text style={[
+                        styles.datePickerOptionText,
+                        isSelected && styles.datePickerOptionTextSelected
+                      ]}>
+                        {date.getDate()} {monthNames[date.getMonth()]} {date.getFullYear()} - {dayNames[date.getDay()]}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
+            </View>
+          </View>
+        )}
+      </View>
+    );
+  };
+
+  const renderEventDetail = () => {
+    const event = selectedEvent || eventsData[0];
+    const eventDate = event.date ? new Date(event.date) : null;
+    const monthNames = ['Ocak', 'Şubat', 'Mart', 'Nisan', 'Mayıs', 'Haziran', 'Temmuz', 'Ağustos', 'Eylül', 'Ekim', 'Kasım', 'Aralık'];
+    
+    const formatDate = (date) => {
+      if (!date) return '-';
+      return `${date.getDate()} ${monthNames[date.getMonth()]} ${date.getFullYear()}`;
+    };
+    
+    return (
+      <ScrollView 
+        style={styles.dashboardScrollView}
+        contentContainerStyle={styles.dashboardContent}
+        showsVerticalScrollIndicator={false}
       >
-        <Image source={require('./assets/back.png')} style={styles.backIcon} />
-        <Text style={styles.backText}>Geri</Text>
-      </TouchableOpacity>
+        <View style={styles.eventDetailHeader}>
+          <Text style={styles.eventDetailTitle}>{event.name}</Text>
+          <TouchableOpacity 
+            style={styles.eventEditButton}
+            onPress={() => navigateToPage('eventEdit')}
+          >
+            <Image source={require('./assets/edit.png')} style={styles.eventEditIcon} />
+            <Text style={styles.eventEditButtonText}>Düzenle</Text>
+          </TouchableOpacity>
+        </View>
 
-      <Text style={styles.pageTitle}>Yeni Etkinlik</Text>
+        <View style={styles.eventDetailSection}>
+          <View style={styles.eventDetailRow}>
+            <Text style={styles.eventDetailLabel}>Tarih</Text>
+            <Text style={[styles.eventDetailValue, !eventDate && styles.eventDetailValueEmpty]}>
+              {formatDate(eventDate)}
+            </Text>
+          </View>
 
-      <View style={styles.createFormSection}>
-        <Text style={styles.formLabel}>Etkinlik Adı</Text>
-        <TextInput
-          style={styles.formInput}
-          placeholder="Etkinlik adı..."
-          placeholderTextColor="#999"
-        />
-      </View>
+          <View style={styles.eventDetailRow}>
+            <Text style={styles.eventDetailLabel}>Saat</Text>
+            <Text style={[styles.eventDetailValue, !event.time && styles.eventDetailValueEmpty]}>
+              {event.time || '-'}
+            </Text>
+          </View>
 
-      <View style={styles.createFormSection}>
-        <Text style={styles.formLabel}>Tarih</Text>
-        <TextInput
-          style={styles.formInput}
-          placeholder="GG/AA/YYYY"
-          placeholderTextColor="#999"
-        />
-      </View>
+          <View style={styles.eventDetailRow}>
+            <Text style={styles.eventDetailLabel}>Konum</Text>
+            <Text style={[styles.eventDetailValue, !event.location && styles.eventDetailValueEmpty]}>
+              {event.location || '-'}
+            </Text>
+          </View>
 
-      <View style={styles.createFormSection}>
-        <Text style={styles.formLabel}>Saat</Text>
-        <TextInput
-          style={styles.formInput}
-          placeholder="SS:DD"
-          placeholderTextColor="#999"
-        />
-      </View>
+          <View style={styles.eventDetailRow}>
+            <Text style={styles.eventDetailLabel}>Kaptan</Text>
+            <Text style={[styles.eventDetailValue, !event.captain && styles.eventDetailValueEmpty]}>
+              {event.captain || '-'}
+            </Text>
+          </View>
 
-      <View style={styles.createFormSection}>
-        <Text style={styles.formLabel}>Konum</Text>
-        <TextInput
-          style={styles.formInput}
-          placeholder="Etkinlik konumu..."
-          placeholderTextColor="#999"
-        />
-      </View>
+          <View style={styles.eventDetailRow}>
+            <Text style={styles.eventDetailLabel}>Yardımcı Kaptan</Text>
+            <Text style={[styles.eventDetailValue, !(event.backupCaptain || event.coCaptain) && styles.eventDetailValueEmpty]}>
+              {event.backupCaptain || event.coCaptain || '-'}
+            </Text>
+          </View>
+        </View>
 
-      <View style={styles.createFormSection}>
-        <Text style={styles.formLabel}>Açıklama</Text>
-        <TextInput
-          style={[styles.formInput, styles.formTextArea]}
-          placeholder="Etkinlik açıklaması..."
-          placeholderTextColor="#999"
-          multiline
-          numberOfLines={6}
-        />
-      </View>
+        {(event.text || event.description) && (
+          <View style={styles.eventDetailSection}>
+            <Text style={styles.eventDetailSectionTitle}>Metin</Text>
+            <Text style={styles.eventDetailDescription}>{event.text || event.description}</Text>
+          </View>
+        )}
 
-      <View style={styles.createFormSection}>
-        <Text style={styles.formLabel}>Kaptan</Text>
-        <TextInput
-          style={styles.formInput}
-          placeholder="Kaptan seç..."
-          placeholderTextColor="#999"
-        />
-      </View>
+        {event.hasImage ? (
+          <View style={styles.eventDetailSection}>
+            <Text style={styles.eventDetailSectionTitle}>Etkinlik Görseli</Text>
+            <View style={styles.eventImagePreview}>
+              <Image 
+                source={require('./assets/placeholder_tanisma_toplantisi.jpg')} 
+                style={styles.eventImagePreviewImage}
+              />
+            </View>
+          </View>
+        ) : (
+          <View style={styles.eventDetailSection}>
+            <Text style={styles.eventDetailSectionTitle}>Etkinlik Görseli</Text>
+            <View style={styles.eventImagePlaceholder}>
+              <Text style={styles.eventImagePlaceholderText}>Görsel eklenmedi</Text>
+            </View>
+          </View>
+        )}
 
-      <View style={styles.createFormSection}>
-        <Text style={styles.formLabel}>Yedek Kaptan</Text>
-        <TextInput
-          style={styles.formInput}
-          placeholder="Yedek kaptan seç..."
-          placeholderTextColor="#999"
-        />
-      </View>
-
-      <View style={styles.createFormActions}>
-        <TouchableOpacity style={styles.attachButton}>
-          <Image source={require('./assets/image.png')} style={styles.attachIcon} />
-          <Text style={styles.attachButtonText}>Kapak Resmi Ekle</Text>
+        <TouchableOpacity 
+          style={styles.deleteButton} 
+          onPress={() => {
+            setConfirmDialogData({
+              type: 'deleteFromDetail',
+              message: 'Bu etkinliği silmek istediğinizden emin misiniz?'
+            });
+            setShowConfirmDialog(true);
+          }}
+        >
+          <Text style={styles.deleteButtonText}>Etkinliği Sil</Text>
         </TouchableOpacity>
-      </View>
+      </ScrollView>
+    );
+  };
 
-      <TouchableOpacity style={styles.submitButton}>
-        <Text style={styles.submitButtonText}>Etkinliği Oluştur</Text>
-      </TouchableOpacity>
-    </ScrollView>
-  );
+  const renderEventEdit = () => {
+    const event = selectedEvent || eventsData[0];
+    const eventDate = event.date ? new Date(event.date) : null;
+    
+    // Initialize editEventDate if not set
+    if (editEventDate === null && eventDate) {
+      setEditEventDate(eventDate);
+    }
+    
+    const handleDeleteEvent = () => {
+      setConfirmDialogData({
+        type: 'deleteFromEdit',
+        message: 'Bu etkinliği silmek istediğinizden emin misiniz?'
+      });
+      setShowConfirmDialog(true);
+    };
+    
+    const handleSaveChanges = () => {
+      setConfirmDialogData({
+        type: 'saveChanges',
+        message: 'Değişiklikleri kaydetmek istediğinizden emin misiniz?'
+      });
+      setShowConfirmDialog(true);
+    };
+    
+    const formatDate = (date) => {
+      if (!date) return '';
+      const monthNames = ['Ocak', 'Şubat', 'Mart', 'Nisan', 'Mayıs', 'Haziran', 'Temmuz', 'Ağustos', 'Eylül', 'Ekim', 'Kasım', 'Aralık'];
+      return `${date.getDate()} ${monthNames[date.getMonth()]} ${date.getFullYear()}`;
+    };
+    
+    return (
+      <View style={{ flex: 1 }}>
+        <ScrollView 
+          style={styles.dashboardScrollView}
+          contentContainerStyle={styles.dashboardContent}
+          showsVerticalScrollIndicator={false}
+        >
+          <Text style={styles.pageTitle}>Etkinliği Düzenle</Text>
+
+          <View style={styles.createFormSection}>
+            <Text style={styles.formLabel}>Etkinlik Adı</Text>
+            <TextInput
+              style={styles.formInput}
+              placeholder="Etkinlik adı"
+              placeholderTextColor="#999"
+              defaultValue={event.name}
+            />
+          </View>
+
+          <View style={styles.createFormSection}>
+            <Text style={styles.formLabel}>Tarih</Text>
+            <TouchableOpacity 
+              style={styles.formInput}
+              onPress={() => setShowEditDatePicker(true)}
+            >
+              <Text style={editEventDate || eventDate ? styles.datePickerText : styles.datePickerPlaceholder}>
+                {editEventDate ? formatDate(editEventDate) : (eventDate ? formatDate(eventDate) : 'Tarih seç')}
+              </Text>
+            </TouchableOpacity>
+          </View>
+
+        <View style={styles.createFormSection}>
+          <Text style={styles.formLabel}>Saat</Text>
+          <TextInput
+            style={styles.formInput}
+            placeholder="Saat"
+            placeholderTextColor="#999"
+            defaultValue={event.time || ''}
+          />
+        </View>
+
+        <View style={styles.createFormSection}>
+          <Text style={styles.formLabel}>Konum</Text>
+          <TextInput
+            style={styles.formInput}
+            placeholder="Konum"
+            placeholderTextColor="#999"
+            defaultValue={event.location || ''}
+          />
+        </View>
+
+        <View style={styles.createFormSection}>
+          <Text style={styles.formLabel}>Metin</Text>
+          <TextInput
+            style={[styles.formInput, styles.formTextArea]}
+            placeholder="Etkinlik metni"
+            placeholderTextColor="#999"
+            multiline
+            numberOfLines={6}
+            defaultValue={event.text || event.description || ''}
+          />
+        </View>
+
+        <View style={styles.createFormSection}>
+          <Text style={styles.formLabel}>Kaptan</Text>
+          <TextInput
+            style={styles.formInput}
+            placeholder="Kaptan"
+            placeholderTextColor="#999"
+            defaultValue={event.captain || ''}
+          />
+        </View>
+
+        <View style={styles.createFormSection}>
+          <Text style={styles.formLabel}>Yardımcı Kaptan</Text>
+          <TextInput
+            style={styles.formInput}
+            placeholder="Yardımcı kaptan"
+            placeholderTextColor="#999"
+            defaultValue={event.backupCaptain || event.coCaptain || ''}
+          />
+        </View>
+
+        <View style={styles.createFormSection}>
+          <Text style={styles.formLabel}>Etkinlik Görseli</Text>
+          <TouchableOpacity style={styles.imageUploadButton}>
+            <Image source={require('./assets/image.png')} style={styles.imageUploadIcon} />
+            <Text style={styles.imageUploadText}>
+              {event.hasImage ? 'Görseli Değiştir' : 'Görsel Ekle'}
+            </Text>
+          </TouchableOpacity>
+        </View>
+
+          <TouchableOpacity style={styles.submitButton} onPress={handleSaveChanges}>
+            <Text style={styles.submitButtonText}>Değişiklikleri Kaydet</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity style={styles.deleteButton} onPress={handleDeleteEvent}>
+            <Text style={styles.deleteButtonText}>Etkinliği Sil</Text>
+          </TouchableOpacity>
+        </ScrollView>
+
+        {/* Date Picker Modal for Edit */}
+        {showEditDatePicker && (
+          <View style={styles.datePickerOverlay}>
+            <TouchableOpacity 
+              style={styles.datePickerBackdrop}
+              activeOpacity={1}
+              onPress={() => setShowEditDatePicker(false)}
+            />
+            <View style={styles.datePickerModal}>
+              <View style={styles.datePickerHeader}>
+                <Text style={styles.datePickerTitle}>Tarih Seç</Text>
+                <TouchableOpacity onPress={() => setShowEditDatePicker(false)}>
+                  <Image source={require('./assets/close.png')} style={styles.datePickerCloseIcon} />
+                </TouchableOpacity>
+              </View>
+              <ScrollView style={styles.datePickerCalendar}>
+                {/* Simple date selection - next 60 days */}
+                {Array.from({ length: 60 }, (_, i) => {
+                  const date = new Date();
+                  date.setDate(date.getDate() + i);
+                  return date;
+                }).map((date, index) => {
+                  const isSelected = editEventDate && date.toDateString() === editEventDate.toDateString();
+                  const dayNames = ['Pazar', 'Pazartesi', 'Salı', 'Çarşamba', 'Perşembe', 'Cuma', 'Cumartesi'];
+                  const monthNames = ['Ocak', 'Şubat', 'Mart', 'Nisan', 'Mayıs', 'Haziran', 'Temmuz', 'Ağustos', 'Eylül', 'Ekim', 'Kasım', 'Aralık'];
+                  
+                  return (
+                    <TouchableOpacity
+                      key={index}
+                      style={[
+                        styles.datePickerOption,
+                        isSelected && styles.datePickerOptionSelected
+                      ]}
+                      onPress={() => {
+                        setEditEventDate(date);
+                        setShowEditDatePicker(false);
+                      }}
+                    >
+                      <Text style={[
+                        styles.datePickerOptionText,
+                        isSelected && styles.datePickerOptionTextSelected
+                      ]}>
+                        {date.getDate()} {monthNames[date.getMonth()]} {date.getFullYear()} - {dayNames[date.getDay()]}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
+            </View>
+          </View>
+        )}
+      </View>
+    );
+  };
 
   if (!fontsLoaded) {
     return (
@@ -1153,6 +1699,14 @@ export default function App() {
             </TouchableOpacity>
 
             <TouchableOpacity 
+              style={[styles.menuItem, currentPage === 'calendar' && styles.menuItemActive]} 
+              onPress={() => navigateTo('calendar')}
+            >
+              <Image source={require('./assets/calendar.png')} style={styles.menuIcon} />
+              <Text style={styles.menuItemText}>Takvim</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity 
               style={[styles.menuItem, currentPage === 'messages' && styles.menuItemActive]} 
               onPress={() => navigateTo('messages')}
             >
@@ -1182,11 +1736,22 @@ export default function App() {
         <Animated.View style={[styles.mainContainer, { opacity: fadeAnim }]}>
           {/* Top Drawer */}
           <View style={styles.topDrawer}>
-            <TouchableOpacity style={styles.iconButton} onPress={toggleMenu}>
-              <View style={styles.iconFrame}>
-                <Image source={require('./assets/menu.png')} style={styles.icon} />
-              </View>
-            </TouchableOpacity>
+            <View style={styles.leftSection}>
+              <TouchableOpacity style={styles.iconButton} onPress={toggleMenu}>
+                <View style={styles.iconFrame}>
+                  <Image source={require('./assets/menu.png')} style={styles.icon} />
+                </View>
+              </TouchableOpacity>
+              
+              {/* Conditionally show back button */}
+              {['messageDetail', 'messageCreate', 'eventCreate', 'eventDetail', 'eventEdit'].includes(currentPage) && (
+                <TouchableOpacity style={styles.iconButton} onPress={handleBackPress}>
+                  <View style={styles.iconFrame}>
+                    <Image source={require('./assets/back.png')} style={styles.icon} />
+                  </View>
+                </TouchableOpacity>
+              )}
+            </View>
 
             <View style={styles.centerLogoContainer}>
               <Image source={require('./assets/itufklogo.png')} style={styles.topLogo} />
@@ -1285,6 +1850,58 @@ export default function App() {
                 />
                 <TouchableOpacity onPress={() => setSearchOpen(false)}>
                   <Image source={require('./assets/close.png')} style={styles.searchCloseIcon} />
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        )}
+
+        {/* Confirmation Dialog */}
+        {showConfirmDialog && (
+          <View style={styles.confirmDialogOverlay}>
+            <View style={styles.confirmDialogBox}>
+              <Text style={styles.confirmDialogTitle}>Emin misiniz?</Text>
+              <Text style={styles.confirmDialogMessage}>{confirmDialogData.message}</Text>
+              <View style={styles.confirmDialogButtons}>
+                <TouchableOpacity 
+                  style={styles.confirmDialogButtonCancel}
+                  onPress={() => setShowConfirmDialog(false)}
+                >
+                  <Text style={styles.confirmDialogButtonCancelText}>İptal</Text>
+                </TouchableOpacity>
+                <TouchableOpacity 
+                  style={styles.confirmDialogButtonConfirm}
+                  onPress={handleConfirmDialogAction}
+                >
+                  <Text style={styles.confirmDialogButtonConfirmText}>Evet</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        )}
+
+        {/* Create Event Prompt */}
+        {showCreateEventPrompt && (
+          <View style={styles.confirmDialogOverlay}>
+            <View style={styles.confirmDialogBox}>
+              <Text style={styles.confirmDialogTitle}>Etkinlik Oluştur</Text>
+              <Text style={styles.confirmDialogMessage}>
+                {createEventPromptDate && 
+                  `${createEventPromptDate.getDate()} ${['Ocak', 'Şubat', 'Mart', 'Nisan', 'Mayıs', 'Haziran', 'Temmuz', 'Ağustos', 'Eylül', 'Ekim', 'Kasım', 'Aralık'][createEventPromptDate.getMonth()]} tarihinde bir etkinlik oluşturmak ister misiniz?`
+                }
+              </Text>
+              <View style={styles.confirmDialogButtons}>
+                <TouchableOpacity 
+                  style={styles.confirmDialogButtonCancel}
+                  onPress={() => setShowCreateEventPrompt(false)}
+                >
+                  <Text style={styles.confirmDialogButtonCancelText}>Hayır</Text>
+                </TouchableOpacity>
+                <TouchableOpacity 
+                  style={styles.confirmDialogButtonConfirm}
+                  onPress={handleCreateEventFromCalendar}
+                >
+                  <Text style={styles.confirmDialogButtonConfirmText}>Evet</Text>
                 </TouchableOpacity>
               </View>
             </View>
@@ -1412,6 +2029,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     pointerEvents: 'none',
+  },
+  leftSection: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
   },
   rightSection: {
     flexDirection: 'row',
@@ -2091,6 +2713,15 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     position: 'relative',
   },
+  pastEventWhiteOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(255, 255, 255, 0.6)',
+    zIndex: 1,
+  },
   eventContentLarge: {
     position: 'absolute',
     left: 0,
@@ -2099,6 +2730,7 @@ const styles = StyleSheet.create({
     bottom: 0,
     padding: 15,
     justifyContent: 'center',
+    zIndex: 2,
   },
   eventNameLarge: {
     fontFamily: 'Inter_18pt-Medium',
@@ -2172,20 +2804,118 @@ const styles = StyleSheet.create({
     textShadowOffset: { width: 0.5, height: 0.5 },
     textShadowRadius: 2,
   },
-  // Calendar Placeholder
-  calendarPlaceholder: {
+  // Calendar Styles - Full Screen
+  calendarFullScreen: {
+    flex: 1,
+    paddingHorizontal: 20,
+    paddingTop: 20,
+  },
+  calendarHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 20,
+    paddingVertical: 10,
+  },
+  calendarNavButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#f0f0f0',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 60,
   },
-  calendarPlaceholderText: {
-    fontSize: 80,
-    marginBottom: 20,
+  calendarNavButtonText: {
+    fontFamily: 'Inter_18pt-Bold',
+    fontSize: 28,
+    color: '#007AFF',
   },
-  calendarPlaceholderSubtext: {
-    fontFamily: 'Inter_18pt-Regular',
-    fontSize: 16,
+  calendarMonthYear: {
+    fontFamily: 'Inter_18pt-Bold',
+    fontSize: 20,
+    color: '#000',
+  },
+  calendarContainerFull: {
+    flex: 1,
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    padding: 10,
+    borderWidth: 1,
+    borderColor: '#e5e5e5',
+  },
+  calendarDayNamesRow: {
+    flexDirection: 'row',
+    marginBottom: 5,
+  },
+  calendarDayNameCell: {
+    flex: 1,
+    alignItems: 'center',
+    paddingVertical: 8,
+  },
+  calendarDayNameText: {
+    fontFamily: 'Inter_18pt-Medium',
+    fontSize: 12,
     color: '#999',
+  },
+  calendarDaysGridFull: {
+    flex: 1,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+  },
+  calendarDayCellFull: {
+    width: '13.5%',
+    minHeight: 75,
+    alignItems: 'center',
+    justifyContent: 'flex-start',
+    padding: 6,
+    paddingTop: 8,
+    marginRight: '0.7%',
+    marginBottom: 6,
+    borderRadius: 12,
+    backgroundColor: '#f8f8f8',
+  },
+  calendarDayCellEmpty: {
+    backgroundColor: 'transparent',
+  },
+  calendarDayCellContentFull: {
+    alignItems: 'center',
+    justifyContent: 'flex-start',
+    width: '100%',
+    flex: 1,
+  },
+  calendarDayTextFull: {
+    fontFamily: 'Inter_18pt-Medium',
+    fontSize: 16,
+    color: '#000',
+    marginBottom: 4,
+  },
+  calendarDayTextWithEvent: {
+    color: '#fff',
+    fontFamily: 'Inter_18pt-Bold',
+    textShadowColor: 'rgba(0, 0, 0, 0.3)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 2,
+  },
+  calendarDayTextTodayBold: {
+    fontFamily: 'Inter_18pt-Bold',
+  },
+  calendarEventNameInCell: {
+    fontFamily: 'Inter_18pt-Medium',
+    fontSize: 9,
+    color: '#fff',
+    textAlign: 'center',
+    lineHeight: 11,
+    textShadowColor: 'rgba(0, 0, 0, 0.4)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 2,
+    marginTop: 2,
+  },
+  todayIndicator: {
+    marginTop: 4,
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#007AFF',
   },
   // Profile Styles
   profileHeader: {
@@ -2296,22 +3026,6 @@ const styles = StyleSheet.create({
     color: '#666',
   },
   // Message Detail Styles
-  backButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 20,
-  },
-  backIcon: {
-    width: 20,
-    height: 20,
-    tintColor: '#007AFF',
-    marginRight: 8,
-  },
-  backText: {
-    fontFamily: 'Inter_18pt-Medium',
-    fontSize: 16,
-    color: '#007AFF',
-  },
   messageDetailCard: {
     backgroundColor: '#fff',
     borderRadius: 12,
@@ -2429,6 +3143,24 @@ const styles = StyleSheet.create({
     color: '#000',
     marginBottom: 8,
   },
+  requiredStar: {
+    color: '#FF0000',
+    fontFamily: 'Inter_18pt-Bold',
+  },
+  eventCreateNote: {
+    backgroundColor: '#E3F2FD',
+    borderRadius: 10,
+    padding: 15,
+    marginBottom: 20,
+    borderLeftWidth: 4,
+    borderLeftColor: '#2196F3',
+  },
+  eventCreateNoteText: {
+    fontFamily: 'Inter_18pt-Regular',
+    fontSize: 13,
+    color: '#1976D2',
+    lineHeight: 19,
+  },
   formInput: {
     backgroundColor: '#fff',
     borderRadius: 10,
@@ -2440,9 +3172,99 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: '#000',
   },
+  formInputError: {
+    borderColor: '#FF0000',
+    borderWidth: 2,
+  },
+  formErrorText: {
+    fontFamily: 'Inter_18pt-Regular',
+    fontSize: 13,
+    color: '#FF0000',
+    marginTop: 5,
+  },
   formTextArea: {
     height: 120,
     textAlignVertical: 'top',
+  },
+  datePickerText: {
+    fontFamily: 'Inter_18pt-Regular',
+    fontSize: 15,
+    color: '#000',
+  },
+  datePickerPlaceholder: {
+    fontFamily: 'Inter_18pt-Regular',
+    fontSize: 15,
+    color: '#999',
+  },
+  datePickerOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    zIndex: 1000,
+  },
+  datePickerBackdrop: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+  },
+  datePickerModal: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: '#fff',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    maxHeight: '70%',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 10,
+    elevation: 10,
+  },
+  datePickerHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e5e5e5',
+  },
+  datePickerTitle: {
+    fontFamily: 'Inter_18pt-Bold',
+    fontSize: 18,
+    color: '#000',
+  },
+  datePickerCloseIcon: {
+    width: 24,
+    height: 24,
+    tintColor: '#666',
+  },
+  datePickerCalendar: {
+    maxHeight: 400,
+  },
+  datePickerOption: {
+    paddingVertical: 15,
+    paddingHorizontal: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f0f0f0',
+  },
+  datePickerOptionSelected: {
+    backgroundColor: '#E3F2FD',
+  },
+  datePickerOptionText: {
+    fontFamily: 'Inter_18pt-Regular',
+    fontSize: 16,
+    color: '#000',
+  },
+  datePickerOptionTextSelected: {
+    fontFamily: 'Inter_18pt-Bold',
+    color: '#007AFF',
   },
   createFormActions: {
     flexDirection: 'row',
@@ -2476,6 +3298,287 @@ const styles = StyleSheet.create({
   },
   submitButtonText: {
     fontFamily: 'Inter_18pt-Bold',
+    fontSize: 16,
+    color: '#fff',
+  },
+  deleteButton: {
+    backgroundColor: '#FF3B30',
+    paddingVertical: 15,
+    borderRadius: 10,
+    alignItems: 'center',
+    marginTop: 10,
+  },
+  deleteButtonText: {
+    fontFamily: 'Inter_18pt-Bold',
+    fontSize: 16,
+    color: '#fff',
+  },
+  imageUploadButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#f0f0f0',
+    paddingVertical: 15,
+    paddingHorizontal: 20,
+    borderRadius: 10,
+    borderWidth: 2,
+    borderColor: '#e5e5e5',
+    borderStyle: 'dashed',
+  },
+  imageUploadIcon: {
+    width: 24,
+    height: 24,
+    tintColor: '#666',
+    marginRight: 10,
+  },
+  imageUploadText: {
+    fontFamily: 'Inter_18pt-Medium',
+    fontSize: 15,
+    color: '#666',
+  },
+  // Event Detail Page Styles
+  eventDetailHeader: {
+    marginBottom: 20,
+    position: 'relative',
+  },
+  eventDetailColorBar: {
+    position: 'absolute',
+    left: -20,
+    top: 0,
+    bottom: 0,
+    width: 6,
+  },
+  eventDetailTitle: {
+    fontFamily: 'Inter_18pt-Bold',
+    fontSize: 28,
+    color: '#000',
+    marginBottom: 15,
+  },
+  eventEditButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#007AFF',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 8,
+    alignSelf: 'flex-start',
+  },
+  eventEditIcon: {
+    width: 16,
+    height: 16,
+    tintColor: '#fff',
+    marginRight: 6,
+  },
+  eventEditButtonText: {
+    fontFamily: 'Inter_18pt-Medium',
+    fontSize: 14,
+    color: '#fff',
+  },
+  eventDetailSection: {
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    padding: 20,
+    marginBottom: 15,
+    borderWidth: 1,
+    borderColor: '#e5e5e5',
+  },
+  eventDetailRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 15,
+  },
+  eventDetailLabel: {
+    fontFamily: 'Inter_18pt-Medium',
+    fontSize: 15,
+    color: '#666',
+  },
+  eventDetailValue: {
+    fontFamily: 'Inter_18pt-Medium',
+    fontSize: 15,
+    color: '#000',
+  },
+  eventDetailValueEmpty: {
+    fontFamily: 'Inter_18pt-Regular',
+    fontSize: 15,
+    color: '#999',
+    fontStyle: 'italic',
+  },
+  eventDetailBadgeSection: {
+    borderRadius: 12,
+    padding: 15,
+    marginBottom: 15,
+    alignItems: 'center',
+  },
+  eventDetailBadgeText: {
+    fontFamily: 'Inter_18pt-Medium',
+    fontSize: 15,
+    color: '#000',
+  },
+  eventDetailSectionTitle: {
+    fontFamily: 'Inter_18pt-Bold',
+    fontSize: 18,
+    color: '#000',
+    marginBottom: 12,
+  },
+  eventDetailDescription: {
+    fontFamily: 'Inter_18pt-Regular',
+    fontSize: 15,
+    color: '#333',
+    lineHeight: 22,
+  },
+  eventAnnouncementStatus: {
+    marginTop: 5,
+  },
+  announcementStatusGood: {
+    backgroundColor: '#E8F5E9',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    alignSelf: 'flex-start',
+  },
+  announcementStatusTextGood: {
+    fontFamily: 'Inter_18pt-Medium',
+    fontSize: 14,
+    color: '#4CAF50',
+  },
+  announcementStatusWarning: {
+    backgroundColor: '#FFF3E0',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    alignSelf: 'flex-start',
+  },
+  announcementStatusTextWarning: {
+    fontFamily: 'Inter_18pt-Medium',
+    fontSize: 14,
+    color: '#FF9800',
+  },
+  participantsList: {
+    marginTop: 10,
+  },
+  participantItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  participantAvatar: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+  },
+  participantInitial: {
+    fontFamily: 'Inter_18pt-Bold',
+    fontSize: 14,
+    color: '#fff',
+  },
+  participantName: {
+    fontFamily: 'Inter_18pt-Medium',
+    fontSize: 15,
+    color: '#000',
+  },
+  participantRole: {
+    fontFamily: 'Inter_18pt-Regular',
+    fontSize: 13,
+    color: '#666',
+    marginLeft: 6,
+  },
+  eventImagePreview: {
+    width: '100%',
+    height: 200,
+    borderRadius: 10,
+    overflow: 'hidden',
+    marginTop: 10,
+  },
+  eventImagePreviewImage: {
+    width: '100%',
+    height: '100%',
+    resizeMode: 'cover',
+  },
+  eventImagePlaceholder: {
+    width: '100%',
+    height: 120,
+    borderRadius: 10,
+    backgroundColor: '#f8f8f8',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 10,
+    borderWidth: 2,
+    borderColor: '#e5e5e5',
+    borderStyle: 'dashed',
+  },
+  eventImagePlaceholderText: {
+    fontFamily: 'Inter_18pt-Regular',
+    fontSize: 14,
+    color: '#999',
+  },
+  confirmDialogOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 2000,
+  },
+  confirmDialogBox: {
+    backgroundColor: '#fff',
+    borderRadius: 15,
+    padding: 25,
+    width: '80%',
+    maxWidth: 400,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 10,
+    elevation: 10,
+  },
+  confirmDialogTitle: {
+    fontFamily: 'Inter_18pt-Bold',
+    fontSize: 20,
+    color: '#000',
+    marginBottom: 15,
+    textAlign: 'center',
+  },
+  confirmDialogMessage: {
+    fontFamily: 'Inter_18pt-Regular',
+    fontSize: 16,
+    color: '#666',
+    marginBottom: 25,
+    textAlign: 'center',
+    lineHeight: 22,
+  },
+  confirmDialogButtons: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  confirmDialogButtonCancel: {
+    flex: 1,
+    backgroundColor: '#e5e5e5',
+    paddingVertical: 12,
+    borderRadius: 10,
+    alignItems: 'center',
+  },
+  confirmDialogButtonCancelText: {
+    fontFamily: 'Inter_18pt-Medium',
+    fontSize: 16,
+    color: '#666',
+  },
+  confirmDialogButtonConfirm: {
+    flex: 1,
+    backgroundColor: '#007AFF',
+    paddingVertical: 12,
+    borderRadius: 10,
+    alignItems: 'center',
+  },
+  confirmDialogButtonConfirmText: {
+    fontFamily: 'Inter_18pt-Medium',
     fontSize: 16,
     color: '#fff',
   },
