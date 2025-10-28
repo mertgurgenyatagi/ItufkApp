@@ -25,6 +25,38 @@
     "web": {
       "favicon": "./assets/favicon.png"
     },
-    
+    "plugins": [
+      [
+        "expo-media-library",
+        {
+          "photosPermission": "Allow $(PRODUCT_NAME) to access your photos.",
+          "savePhotosPermission": "Allow $(PRODUCT_NAME) to save photos.",
+          "isAccessMediaLocationEnabled": false
+        }
+    ],
+    [
+      "expo-notifications",
+      {
+        "icon": "./assets/notifications.png",
+        "color": "#FF6B00",
+        "androidMode": "default",
+        "androidCollapsedTitle": "+{unread_notifications} yeni bildirim"
+      }
+    ],
+    [
+      "expo-notifications",
+      {
+        "icon": "./assets/notifications.png",
+        "color": "#FF6B00",
+        "androidMode": "default",
+        "androidCollapsedTitle": "+{unread_notifications} yeni bildirim"
+      }
+    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "REPLACE_WITH_YOUR_EAS_PROJECT_ID"
+      }
+    }
   }
 }

@@ -1,8 +1,19 @@
 import { StatusBar } from 'expo-status-bar';
-import { StyleSheet, Text, View, Image, Animated, TouchableOpacity, Dimensions, SafeAreaView, Platform, StatusBar as RNStatusBar, ScrollView, TextInput, BackHandler } from 'react-native';
+import { StyleSheet, Text, View, Image, Animated, TouchableOpacity, Dimensions, SafeAreaView, Platform, StatusBar as RNStatusBar, ScrollView, TextInput, BackHandler, Alert, Linking } from 'react-native';
 import { useEffect, useRef, useState } from 'react';
 import * as Font from 'expo-font';
 import { LinearGradient } from 'expo-linear-gradient';
+import * as ImagePicker from 'expo-image-picker';
+import * as Clipboard from 'expo-clipboard';
+import * as MediaLibrary from 'expo-media-library';
+import * as FileSystem from 'expo-file-system/legacy';
+import { loginWithPassword, checkAuthStatus, logout, getCurrentUser } from './firebase/authService';
+import { getAllUsers } from './firebase/adminService';
+import { createEvent, getAllEvents, updateEvent, deleteEvent, subscribeToEvents } from './firebase/eventsService';
+import { uploadProfileImage, uploadEventImage } from './firebase/storageService';
+import { subscribeToMessages, createMessage, deleteMessage, subscribeToReplies, createReply, deleteReply } from './firebase/messagesService';
+import { subscribeToNotifications, createNotification, deleteNotification, markNotificationAsRead, notifyMessageCCUsers, notifyMessageOwnerOfReply, notifyTaggedUsers, notifyEventAnnouncementReminder } from './firebase/notificationsService';
+import { registerForPushNotifications, savePushToken, removePushToken, showLocalNotification } from './firebase/pushNotificationsService';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const STATUS_BAR_HEIGHT = Platform.OS === 'android' ? RNStatusBar.currentHeight : 0;
@@ -13,6 +24,10 @@ const CARD_GAP = 10;
 export default function App() {
   const [showMainPage, setShowMainPage] = useState(false);
   const [fontsLoaded, setFontsLoaded] = useState(false);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [checkingAuth, setCheckingAuth] = useState(true);
+  const [currentUser, setCurrentUser] = useState(null);
+  const [allUsers, setAllUsers] = useState([]);
   const [menuOpen, setMenuOpen] = useState(false);
   const [currentPage, setCurrentPage] = useState('dashboard'); // dashboard, notifications, events, messages, settings, calendar, profile, messageDetail, messageCreate, eventCreate, eventDetail, eventEdit
   const [showCaptainOnly, setShowCaptainOnly] = useState(false);
@@ -41,20 +56,46 @@ export default function App() {
   const [confirmDialogData, setConfirmDialogData] = useState({ type: '', message: '' });
   const [showCreateEventPrompt, setShowCreateEventPrompt] = useState(false);
   const [createEventPromptDate, setCreateEventPromptDate] = useState(null);
+  const [showCaptainPicker, setShowCaptainPicker] = useState(false);
+  const [showCoCaptainPicker, setShowCoCaptainPicker] = useState(false);
+  const [showEditCaptainPicker, setShowEditCaptainPicker] = useState(false);
+  const [showEditCoCaptainPicker, setShowEditCoCaptainPicker] = useState(false);
+  const [loginPassword, setLoginPassword] = useState('');
+  const [loginLoading, setLoginLoading] = useState(false);
+  const [loginError, setLoginError] = useState('');
+  const [showAnnouncementDialog, setShowAnnouncementDialog] = useState(false);
+  const [announcementStep, setAnnouncementStep] = useState(1);
+  const [showDocumentsDialog, setShowDocumentsDialog] = useState(false);
+  const [documentsStep, setDocumentsStep] = useState(1);
+  const [eventsData, setEventsData] = useState([]);
+  const [editEventName, setEditEventName] = useState('');
+  const [editEventTime, setEditEventTime] = useState('');
+  const [editEventLocation, setEditEventLocation] = useState('');
+  const [editEventText, setEditEventText] = useState('');
+  const [editEventCaptain, setEditEventCaptain] = useState('');
+  const [editEventCoCaptain, setEditEventCoCaptain] = useState('');
+  const [profileImageUri, setProfileImageUri] = useState(null);
+  const [eventImageUri, setEventImageUri] = useState(null);
+  const [uploadingImage, setUploadingImage] = useState(false);
+  const [ccUsers, setCcUsers] = useState([]);
+  const [showCCPicker, setShowCCPicker] = useState(false);
+  const [messageTitle, setMessageTitle] = useState('');
+  const [messageContent, setMessageContent] = useState('');
+  const [messagesData, setMessagesData] = useState([]);
+  const [repliesData, setRepliesData] = useState([]);
+  const [replyContent, setReplyContent] = useState('');
+  const [showMentionSuggestions, setShowMentionSuggestions] = useState(false);
+  const [mentionFilter, setMentionFilter] = useState('');
+  const [mentionCursorPosition, setMentionCursorPosition] = useState(0);
+  const [notificationsData, setNotificationsData] = useState([]);
+  const [navigationHistory, setNavigationHistory] = useState(['dashboard']);
+  const [toastMessage, setToastMessage] = useState('');
+  const [showToast, setShowToast] = useState(false);
+  const toastOpacity = useRef(new Animated.Value(0)).current;
   const breathingAnim = useRef(new Animated.Value(0.75)).current;
   const fadeAnim = useRef(new Animated.Value(1)).current;
   const logoFadeAnim = useRef(new Animated.Value(0)).current;
   const menuSlideAnim = useRef(new Animated.Value(-SCREEN_WIDTH * 0.75)).current;
-
-  // Centralized events data
-  const eventsData = [
-    { id: 1, date: '2025-10-12', name: 'Tanışma Toplantısı', time: '14:00', location: 'İTÜ Merkez Kampüs', text: 'Yeni üyelerimizle tanışma ve kaynaşma toplantısı. Kulüp hakkında genel bilgiler verilecek ve dönem planları paylaşılacak.', color: '#6B8E9E', hasImage: true, captain: 'Ahmet', coCaptain: 'Zeynep' },
-    { id: 2, date: '2025-10-17', name: 'Kadıköy Gezisi', time: '10:00', location: 'Kadıköy Rıhtım', text: 'Sokak fotoğrafçılığı pratiği için Kadıköy gezisi. Sabah erken saatlerde buluşup akşam üzeri sona erecek.', color: '#8B7355', hasImage: true, captain: 'Mert', coCaptain: 'Emre' },
-    { id: 3, date: '2025-10-25', name: 'Teknik Eğitim 102', time: '16:00', location: 'İTÜ Fotoğraf Kulübü', text: 'Kompozisyon teknikleri ve ışık kullanımı üzerine detaylı eğitim. Temel seviye bilgi gerektirir.', color: '#7A8B99', hasImage: true, captain: 'Selin', coCaptain: 'Mert' },
-    { id: 4, date: '2025-11-02', name: 'Portre Çekimi Workshop', time: '13:00', location: 'İTÜ Stüdyo', text: 'Profesyonel portre fotoğrafçılığı teknikleri workshop. Stüdyo ekipmanları kullanımı öğretilecek.', color: '#9B8B7E', hasImage: true, captain: 'Elif' },
-    { id: 5, date: '2025-11-08', name: 'Gece Fotoğrafçılığı', time: '20:00', location: 'Ortaköy Sahil', text: 'Uzun pozlama ve gece fotoğrafçılığı pratiği. Tripod getirmek zorunludur.', color: '#5A6B7A', hasImage: true, captain: 'Mert' },
-    { id: 6, date: '2025-11-15', name: 'Botanik Gezisi', captain: 'Ayşe', hasImage: false },
-  ];
 
   useEffect(() => {
     // Load custom fonts
@@ -75,6 +116,191 @@ export default function App() {
     
     loadFonts();
   }, []);
+
+  // Check authentication status on app load
+  useEffect(() => {
+    const checkAuth = async () => {
+      if (!fontsLoaded) return;
+      
+      try {
+        const user = await checkAuthStatus();
+        if (user) {
+          setCurrentUser(user);
+          setIsAuthenticated(true);
+          
+          // Load all users for member list and captain selection
+          const users = await getAllUsers();
+          setAllUsers(users);
+
+          // Register for push notifications and save token
+          try {
+            const token = await registerForPushNotifications();
+            if (token) {
+              await savePushToken(user.id, token);
+            }
+          } catch (e) {
+            console.log('Push registration failed:', e?.message);
+          }
+        }
+      } catch (error) {
+        console.error('Auth check error:', error);
+      } finally {
+        setCheckingAuth(false);
+      }
+    };
+    
+    checkAuth();
+  }, [fontsLoaded]);
+
+  // Load events from Firebase with real-time updates
+  useEffect(() => {
+    if (!isAuthenticated) return;
+
+    // Subscribe to real-time events updates
+    const unsubscribe = subscribeToEvents((events) => {
+      setEventsData(events);
+    });
+
+    return () => unsubscribe();
+  }, [isAuthenticated]);
+
+  // Load messages from Firebase with real-time updates
+  useEffect(() => {
+    if (!isAuthenticated) return;
+
+    // Subscribe to real-time messages updates
+    const unsubscribe = subscribeToMessages((messages) => {
+      setMessagesData(messages);
+    });
+
+    return () => unsubscribe();
+  }, [isAuthenticated]);
+
+  // Load replies when viewing a message detail page
+  useEffect(() => {
+    if (currentPage === 'messageDetail' && selectedMessage?.id) {
+      // Subscribe to real-time replies updates
+      const unsubscribe = subscribeToReplies(selectedMessage.id, (replies) => {
+        setRepliesData(replies);
+      });
+
+      // Auto-insert original poster's tag when opening reply
+      if (selectedMessage.sender && selectedMessage.sender !== currentUser?.name) {
+        setReplyContent(`@${selectedMessage.sender} `);
+      } else {
+        setReplyContent('');
+      }
+
+      return () => unsubscribe();
+    } else {
+      setRepliesData([]);
+      setReplyContent('');
+      setShowMentionSuggestions(false);
+    }
+  }, [currentPage, selectedMessage, currentUser]);
+
+  // Load notifications from Firebase with real-time updates
+  useEffect(() => {
+    if (!isAuthenticated || !currentUser?.id) return;
+
+    // Subscribe to real-time notifications updates
+    const unsubscribe = subscribeToNotifications(currentUser.id, (notifications) => {
+      setNotificationsData(notifications);
+    });
+
+    return () => unsubscribe();
+  }, [isAuthenticated, currentUser]);
+
+  // Check for event announcement reminders daily at 17:00
+  useEffect(() => {
+    if (!isAuthenticated || !currentUser?.id || !allUsers.length) return;
+
+    const checkEventReminders = async () => {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+
+      for (const event of eventsData) {
+        if (event.announced) continue; // Skip if already announced
+
+        const eventDate = event.date ? new Date(event.date) : null;
+        if (!eventDate) continue;
+
+        eventDate.setHours(0, 0, 0, 0);
+        const daysRemaining = Math.floor((eventDate - today) / (1000 * 60 * 60 * 24));
+
+        // Notify if 1-7 days remaining and not announced
+        if (daysRemaining >= 1 && daysRemaining <= 7) {
+          const captainUser = allUsers.find(u => u.name === event.captain);
+          const coCaptainUser = allUsers.find(u => u.name === event.coCaptain);
+
+          // Only notify if current user is captain or co-captain
+          if (captainUser?.id === currentUser.id || coCaptainUser?.id === currentUser.id) {
+            await notifyEventAnnouncementReminder(
+              captainUser?.id,
+              coCaptainUser?.id,
+              { name: event.name, eventId: event.id },
+              daysRemaining
+            );
+          }
+        }
+      }
+    };
+
+    const scheduleNext17OClockCheck = () => {
+      const now = new Date();
+      const next17OClock = new Date();
+      
+      // Set to today at 17:00
+      next17OClock.setHours(17, 0, 0, 0);
+      
+      // If it's already past 17:00 today, schedule for tomorrow
+      if (now >= next17OClock) {
+        next17OClock.setDate(next17OClock.getDate() + 1);
+      }
+      
+      const msUntil17OClock = next17OClock - now;
+      
+      console.log(`Next announcement reminder check scheduled for: ${next17OClock.toLocaleString('tr-TR')}`);
+      
+      return setTimeout(() => {
+        console.log('Running 17:00 announcement reminder check...');
+        checkEventReminders();
+        
+        // Schedule the next day's check
+        scheduleNext17OClockCheck();
+      }, msUntil17OClock);
+    };
+
+    // Schedule the first check
+    const timeout = scheduleNext17OClockCheck();
+
+    return () => clearTimeout(timeout);
+  }, [isAuthenticated, currentUser, eventsData, allUsers]);
+
+  // Initialize edit form fields when navigating to event edit page
+  useEffect(() => {
+    if (currentPage === 'eventEdit' && selectedEvent) {
+      setEditEventName(selectedEvent.name || '');
+      setEditEventTime(selectedEvent.time || '');
+      setEditEventLocation(selectedEvent.location || '');
+      setEditEventText(selectedEvent.text || selectedEvent.description || '');
+      setEditEventCaptain(selectedEvent.captain || '');
+      setEditEventCoCaptain(selectedEvent.coCaptain || selectedEvent.backupCaptain || '');
+      if (selectedEvent.date) {
+        setEditEventDate(new Date(selectedEvent.date));
+      }
+    }
+  }, [currentPage, selectedEvent]);
+
+  // Clear message fields when leaving message create page
+  useEffect(() => {
+    if (currentPage !== 'messageCreate') {
+      setCcUsers([]);
+      setShowCCPicker(false);
+      setMessageTitle('');
+      setMessageContent('');
+    }
+  }, [currentPage]);
 
   useEffect(() => {
     if (!fontsLoaded) return;
@@ -129,6 +355,37 @@ export default function App() {
     };
   }, [fontsLoaded]);
 
+  // Toast notification effect
+  useEffect(() => {
+    if (showToast) {
+      // Fade in
+      Animated.timing(toastOpacity, {
+        toValue: 1,
+        duration: 300,
+        useNativeDriver: true,
+      }).start();
+
+      // Auto-hide after 2 seconds
+      const timer = setTimeout(() => {
+        Animated.timing(toastOpacity, {
+          toValue: 0,
+          duration: 300,
+          useNativeDriver: true,
+        }).start(() => {
+          setShowToast(false);
+        });
+      }, 2000);
+
+      return () => clearTimeout(timer);
+    }
+  }, [showToast, toastOpacity]);
+
+  // Helper function to show toast
+  const showToastNotification = (message) => {
+    setToastMessage(message);
+    setShowToast(true);
+  };
+
   const toggleMenu = () => {
     const toValue = menuOpen ? -SCREEN_WIDTH * 0.75 : 0;
     Animated.timing(menuSlideAnim, {
@@ -146,23 +403,49 @@ export default function App() {
 
   const navigateToPage = (page) => {
     setCurrentPage(page);
+    setMenuOpen(false);
+    setSearchOpen(false);
+    setNotificationsDropdownOpen(false);
+    
+    // Add to navigation history
+    setNavigationHistory(prev => [...prev, page]);
   };
 
-  const handleConfirmDialogAction = () => {
+  const handleConfirmDialogAction = async () => {
     setShowConfirmDialog(false);
     
     switch (confirmDialogData.type) {
       case 'saveChanges':
-        // Save changes logic here
-        navigateToPage('eventDetail');
+        try {
+          if (selectedEvent && selectedEvent.id) {
+            await updateEvent(selectedEvent.id, {
+              name: editEventName,
+              date: editEventDate ? editEventDate.toISOString().split('T')[0] : null,
+              time: editEventTime,
+              location: editEventLocation,
+              text: editEventText,
+              captain: editEventCaptain,
+              coCaptain: editEventCoCaptain,
+            });
+            navigateToPage('eventDetail');
+          }
+        } catch (error) {
+          console.error('Update event error:', error);
+          alert('Etkinlik güncellenirken bir hata oluştu');
+        }
         break;
       case 'deleteFromEdit':
-        // Delete event logic here
-        navigateToPage('events');
-        break;
       case 'deleteFromDetail':
-        // Delete event logic here
-        navigateToPage('events');
+        try {
+          if (selectedEvent && selectedEvent.id) {
+            await deleteEvent(selectedEvent.id);
+            setSelectedEvent(null);
+            navigateToPage('events');
+          }
+        } catch (error) {
+          console.error('Delete event error:', error);
+          alert('Etkinlik silinirken bir hata oluştu');
+        }
         break;
       default:
         break;
@@ -176,21 +459,41 @@ export default function App() {
   };
 
   const handleBackPress = () => {
-    // Define navigation hierarchy
-    const navigationMap = {
-      'messageDetail': 'messages',
-      'messageCreate': 'messages',
-      'eventCreate': 'events',
-      'eventDetail': 'events',
-      'eventEdit': 'eventDetail',
-    };
-    
-    const previousPage = navigationMap[currentPage];
-    if (previousPage) {
-      setCurrentPage(previousPage);
-      return true; // Prevent default behavior (exit app)
+    // Close any open overlays first
+    if (menuOpen) {
+      setMenuOpen(false);
+      return true;
     }
-    return false; // Allow default behavior for main pages
+    
+    if (notificationsDropdownOpen) {
+      setNotificationsDropdownOpen(false);
+      return true;
+    }
+    
+    if (searchOpen) {
+      setSearchOpen(false);
+      return true;
+    }
+    
+    // Navigate back through history
+    if (navigationHistory.length > 1) {
+      const newHistory = [...navigationHistory];
+      newHistory.pop(); // Remove current page
+      const previousPage = newHistory[newHistory.length - 1];
+      
+      setNavigationHistory(newHistory);
+      setCurrentPage(previousPage);
+      return true;
+    }
+    
+    // If no history, go to dashboard
+    if (currentPage !== 'dashboard') {
+      setNavigationHistory(['dashboard']);
+      setCurrentPage('dashboard');
+      return true;
+    }
+    
+    return false; // Allow default behavior (exit app)
   };
 
   // Handle Android back button
@@ -198,7 +501,7 @@ export default function App() {
     const backHandler = BackHandler.addEventListener('hardwareBackPress', handleBackPress);
     
     return () => backHandler.remove();
-  }, [currentPage]);
+  }, [currentPage, navigationHistory, menuOpen, notificationsDropdownOpen, searchOpen]);
 
   const renderPageContent = () => {
     switch (currentPage) {
@@ -231,6 +534,76 @@ export default function App() {
     }
   };
 
+  const handleLogin = async () => {
+    try {
+      setLoginLoading(true);
+      setLoginError('');
+      
+      const userData = await loginWithPassword(loginPassword);
+      
+      // Login successful
+      setCurrentUser(userData);
+      setIsAuthenticated(true);
+      
+      // Load all users for member list and captain selection
+      const users = await getAllUsers();
+      setAllUsers(users);
+      
+      setShowMainPage(true);
+    } catch (err) {
+      setLoginError(err.message || 'Giriş başarısız');
+    } finally {
+      setLoginLoading(false);
+    }
+  };
+
+  const renderLogin = () => {
+    return (
+      <View style={styles.loginContainer}>
+        <View style={styles.loginBox}>
+          <Image 
+            source={require('./assets/itufklogo.png')} 
+            style={styles.loginLogo}
+          />
+          <Text style={styles.loginTitle}>İTÜ Fotoğraf Kulübü</Text>
+          <Text style={styles.loginSubtitle}>Yönetim Kurulu Uygulaması</Text>
+          
+          <TextInput
+            style={[styles.loginInput, loginError && styles.loginInputError]}
+            placeholder="Şifrenizi girin"
+            placeholderTextColor="#999"
+            secureTextEntry
+            value={loginPassword}
+            onChangeText={(text) => {
+              setLoginPassword(text);
+              setLoginError('');
+            }}
+            editable={!loginLoading}
+          />
+          
+          {loginError ? (
+            <Text style={styles.loginError}>{loginError}</Text>
+          ) : null}
+          
+          <TouchableOpacity 
+            style={[styles.loginButton, loginLoading && styles.loginButtonDisabled]}
+            onPress={handleLogin}
+            disabled={loginLoading}
+          >
+            <Text style={styles.loginButtonText}>
+              {loginLoading ? 'Giriş yapılıyor...' : 'Giriş Yap'}
+            </Text>
+          </TouchableOpacity>
+          
+          <Text style={styles.loginHelp}>
+            Şifrenizi hatırlamıyor musunuz?{'\n'}
+            Uygulama yöneticisi ile iletişime geçin.
+          </Text>
+        </View>
+      </View>
+    );
+  };
+
   const renderDashboard = () => (
     <ScrollView 
       style={styles.dashboardScrollView}
@@ -238,10 +611,21 @@ export default function App() {
       showsVerticalScrollIndicator={false}
     >
       <View style={styles.dashboardHeader}>
-        <View style={styles.profileFrame} />
+        {(currentUser?.profileImageUrl || profileImageUri) ? (
+          <Image 
+            source={{ uri: profileImageUri || currentUser?.profileImageUrl }}
+            style={styles.profileFrame}
+          />
+        ) : (
+          <View style={styles.profileFrame}>
+            <Text style={styles.profileInitial}>
+              {currentUser?.name?.charAt(0) || 'U'}
+            </Text>
+          </View>
+        )}
         <View style={styles.welcomeText}>
           <Text style={styles.welcomeMessage}>Hoş geldin 👋</Text>
-          <Text style={styles.userName}>Mert</Text>
+          <Text style={styles.userName}>{currentUser?.name || 'Kullanıcı'}</Text>
         </View>
       </View>
       <View style={styles.dateSectionRow}>
@@ -266,75 +650,91 @@ export default function App() {
             <Text style={styles.sectionButtonText}>Etkinliklere git</Text>
           </TouchableOpacity>
         </View>
+        {(() => {
+          const today = new Date();
+          today.setHours(0, 0, 0, 0);
+          const upcomingEvents = eventsData
+            .filter(event => {
+              if (!event.date) return false;
+              const eventDate = new Date(event.date);
+              return eventDate >= today;
+            })
+            .sort((a, b) => new Date(a.date) - new Date(b.date))
+            .slice(0, 5);
+          
+          if (upcomingEvents.length === 0) {
+            return (
+              <View style={styles.emptyState}>
+                <Text style={styles.emptyStateText}>Henüz etkinlik yok</Text>
+              </View>
+            );
+          }
+          
+          return (
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
-          snapToInterval={CARD_WIDTH + CARD_GAP}
-          decelerationRate="fast"
-          contentContainerStyle={styles.carouselContent}
-          style={styles.carousel}
-        >
-          <View style={[styles.eventCard, { backgroundColor: '#6B8E9E' }]}>
+              contentContainerStyle={{ paddingRight: 16 }}
+            >
+              {upcomingEvents.map((event, index) => {
+                const eventDate = event.date ? new Date(event.date) : null;
+                const dayNames = ['Pazar', 'Pazartesi', 'Salı', 'Çarşamba', 'Perşembe', 'Cuma', 'Cumartesi'];
+                const monthNames = ['Ocak', 'Şubat', 'Mart', 'Nisan', 'Mayıs', 'Haziran', 'Temmuz', 'Ağustos', 'Eylül', 'Ekim', 'Kasım', 'Aralık'];
+                
+                return (
+                  <TouchableOpacity 
+                    key={event.id || index} 
+                    style={[
+                      styles.eventCard, 
+                      { backgroundColor: (event.hasImage || event.imageUrl) ? '#1a1a1a' : '#999' }
+                    ]}
+                    onPress={() => {
+                      setSelectedEvent(event);
+                      navigateToPage('eventDetail');
+                    }}
+                  >
+                    {(event.hasImage || event.imageUrl) && (
+                      <>
             <View style={styles.imageWrapper}>
               <Image 
-                source={require('./assets/placeholder_tanisma_toplantisi.jpg')} 
+                            source={{ uri: event.imageUrl }} 
                 style={styles.eventImage}
               />
             </View>
             <LinearGradient
-              colors={['#6B8E9E', '#6B8E9E', 'rgba(107,142,158,0.8)', 'rgba(107,142,158,0.6)', 'rgba(107,142,158,0.3)', 'rgba(107,142,158,0)']}
+                          colors={[
+                            'rgba(0, 0, 0, 0.7)', 
+                            'rgba(0, 0, 0, 0.6)', 
+                            'rgba(0, 0, 0, 0.4)', 
+                            'rgba(0, 0, 0, 0.2)', 
+                            'rgba(0, 0, 0, 0.05)', 
+                            'rgba(0, 0, 0, 0)'
+                          ]}
               locations={[0, 0.3, 0.5, 0.7, 0.85, 1]}
               start={{ x: 0, y: 0 }}
               end={{ x: 1, y: 0 }}
               style={styles.imageOpacityMask}
             />
+                      </>
+                    )}
             <View style={styles.eventContent}>
-              <Text style={styles.eventName}>Tanışma Toplantısı</Text>
-              <Text style={styles.eventDate}>12 Ekim Pazar (3 gün kaldı)</Text>
+                      <Text style={styles.eventName}>{event.name}</Text>
+                      {eventDate && event.time ? (
+                        <Text style={styles.eventDateTime}>
+                          {eventDate.getDate()} {monthNames[eventDate.getMonth()]} {dayNames[eventDate.getDay()]} • {event.time}
+                        </Text>
+                      ) : eventDate ? (
+                        <Text style={styles.eventDateTime}>
+                          {eventDate.getDate()} {monthNames[eventDate.getMonth()]} {dayNames[eventDate.getDay()]}
+                        </Text>
+                      ) : null}
             </View>
-          </View>
-          <View style={[styles.eventCard, { backgroundColor: '#8B7355' }]}>
-            <View style={styles.imageWrapper}>
-              <Image 
-                source={require('./assets/placeholder_kadikoy_gezisi.jpg')} 
-                style={styles.eventImage}
-              />
-            </View>
-            <LinearGradient
-              colors={['#8B7355', '#8B7355', 'rgba(139,115,85,0.8)', 'rgba(139,115,85,0.6)', 'rgba(139,115,85,0.3)', 'rgba(139,115,85,0)']}
-              locations={[0, 0.3, 0.5, 0.7, 0.85, 1]}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 0 }}
-              style={styles.imageOpacityMask}
-            />
-            <View style={styles.eventContent}>
-              <Text style={styles.eventName}>Kadıköy Gezisi</Text>
-              <Text style={styles.eventDate}>17 Ekim Cuma (8 gün kaldı)</Text>
-              <View style={styles.captainBadge}>
-                <Text style={styles.captainText}>Bu etkinlikte kaptansın! ⚡</Text>
-              </View>
-            </View>
-          </View>
-          <View style={[styles.eventCard, { backgroundColor: '#7A8B99' }]}>
-            <View style={styles.imageWrapper}>
-              <Image 
-                source={require('./assets/placeholder_teknik_egitim_102.jpg')} 
-                style={styles.eventImage}
-              />
-            </View>
-            <LinearGradient
-              colors={['#7A8B99', '#7A8B99', 'rgba(122,139,153,0.8)', 'rgba(122,139,153,0.6)', 'rgba(122,139,153,0.3)', 'rgba(122,139,153,0)']}
-              locations={[0, 0.3, 0.5, 0.7, 0.85, 1]}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 0 }}
-              style={styles.imageOpacityMask}
-            />
-            <View style={styles.eventContent}>
-              <Text style={styles.eventName}>Teknik Eğitim 102</Text>
-              <Text style={styles.eventDate}>25 Ekim Cumartesi (16 gün kaldı)</Text>
-            </View>
-          </View>
+                  </TouchableOpacity>
+                );
+              })}
         </ScrollView>
+          );
+        })()}
       </View>
       <View style={styles.messageBoardSection}>
         <View style={styles.sectionHeaderRow}>
@@ -343,90 +743,71 @@ export default function App() {
             <Text style={styles.sectionButtonText}>Mesaj panosuna git</Text>
           </TouchableOpacity>
         </View>
-        
+        {messagesData.length === 0 ? (
+          <View style={styles.emptyState}>
+            <Text style={styles.emptyStateText}>Henüz mesaj yok</Text>
+            </View>
+        ) : (
+          messagesData.slice(0, 3).map((message) => {
+            const messageDate = message.createdAt ? new Date(message.createdAt) : new Date();
+            const monthNames = ['Ocak', 'Şubat', 'Mart', 'Nisan', 'Mayıs', 'Haziran', 'Temmuz', 'Ağustos', 'Eylül', 'Ekim', 'Kasım', 'Aralık'];
+            
+            return (
         <TouchableOpacity 
+                key={message.id}
           style={styles.messageCard}
           onPress={() => {
-            setSelectedMessage({id: 1, sender: 'Ayşe', title: 'Gelecek hafta için ekipman kontrolü'});
+                  setSelectedMessage(message);
             navigateToPage('messageDetail');
           }}
         >
           <View style={styles.messageHeader}>
-            <View style={[styles.userAvatar, { backgroundColor: '#FF6B6B' }]}>
-              <Text style={styles.avatarInitial}>A</Text>
-            </View>
-            <View style={styles.messageHeaderInfo}>
-              <View style={styles.messageTopRow}>
-                <Text style={styles.messageSender}>Ayşe</Text>
-                <Text style={styles.messageDate}>2 saat önce</Text>
-              </View>
-              <Text style={styles.messageTitle}>Gelecek hafta için ekipman kontrolü</Text>
-            </View>
-          </View>
-          <Text style={styles.messageContent} numberOfLines={3}>
-            Merhabalar! Önümüzdeki hafta yapacağımız çekim için ekipmanları kontrol etmemiz gerekiyor. Özellikle lens ve tripod sayısını netleştirmemiz lazım. Herkes elindeki malzemelerin listesini paylaşabilir mi?
+                  <Text style={styles.messageTitle}>{message.title}</Text>
+                  <Text style={styles.messageDate}>
+                    {getTimeAgo(message.createdAt)}
           </Text>
-          <View style={styles.messageFooter}>
-            <Text style={styles.replyCount}>💬 12 yanıt</Text>
           </View>
-        </TouchableOpacity>
-
-        <TouchableOpacity 
-          style={styles.messageCard}
-          onPress={() => {
-            setSelectedMessage({id: 2, sender: 'Emre', title: 'Fotoğraf yarışması başvuruları'});
-            navigateToPage('messageDetail');
-          }}
-        >
-          <View style={styles.messageHeader}>
-            <View style={[styles.userAvatar, { backgroundColor: '#4ECDC4' }]}>
-              <Text style={styles.avatarInitial}>E</Text>
-            </View>
-            <View style={styles.messageHeaderInfo}>
-              <View style={styles.messageTopRow}>
-                <Text style={styles.messageSender}>Emre</Text>
-                <Text style={styles.messageDate}>5 saat önce</Text>
-              </View>
-              <Text style={styles.messageTitle}>Fotoğraf yarışması başvuruları</Text>
-            </View>
-          </View>
-          <Text style={styles.messageContent} numberOfLines={3}>
-            Arkadaşlar, şehir genelindeki fotoğraf yarışmasına toplu başvuru yapmayı düşünüyoruz. Katılmak isteyen varsa bu akşam saat 20:00'de online toplantıda buluşalım. Detayları orada konuşuruz.
+                <Text style={styles.messageSender}>Gönderen: {message.sender}</Text>
+                <Text style={styles.messagePreview} numberOfLines={2}>
+                  {message.content}
           </Text>
-          <View style={styles.messageFooter}>
-            <Text style={styles.replyCount}>💬 8 yanıt</Text>
-          </View>
         </TouchableOpacity>
-
-        <TouchableOpacity 
-          style={styles.messageCard}
-          onPress={() => {
-            setSelectedMessage({id: 3, sender: 'Zeynep', title: 'Lightroom eğitimi kaydı'});
-            navigateToPage('messageDetail');
-          }}
-        >
-          <View style={styles.messageHeader}>
-            <View style={[styles.userAvatar, { backgroundColor: '#95E1D3' }]}>
-              <Text style={styles.avatarInitial}>Z</Text>
-            </View>
-            <View style={styles.messageHeaderInfo}>
-              <View style={styles.messageTopRow}>
-                <Text style={styles.messageSender}>Zeynep</Text>
-                <Text style={styles.messageDate}>Dün</Text>
-              </View>
-              <Text style={styles.messageTitle}>Lightroom eğitimi kaydı</Text>
-            </View>
-          </View>
-          <Text style={styles.messageContent} numberOfLines={3}>
-            Geçen hafta yaptığımız Lightroom eğitiminin kaydını Drive'a yükledim. Katılamayanlar için çok faydalı olacağını düşünüyorum. Link pano açıklamasında. İyi çalışmalar!
-          </Text>
-          <View style={styles.messageFooter}>
-            <Text style={styles.replyCount}>💬 25 yanıt</Text>
-          </View>
-        </TouchableOpacity>
+            );
+          })
+        )}
       </View>
     </ScrollView>
   );
+
+  const handleNotificationClick = async (notification) => {
+    // Mark as read
+    if (!notification.read) {
+      await markNotificationAsRead(notification.id);
+    }
+
+    // Navigate based on type
+    if (notification.relatedType === 'message' && notification.relatedId) {
+      const message = messagesData.find(m => m.id === notification.relatedId);
+      if (message) {
+        setSelectedMessage(message);
+        navigateToPage('messageDetail');
+      }
+    } else if (notification.relatedType === 'event' && notification.relatedId) {
+      const event = eventsData.find(e => e.id === notification.relatedId);
+      if (event) {
+        setSelectedEvent(event);
+        navigateToPage('eventDetail');
+      }
+    }
+  };
+
+  const handleDeleteNotification = async (notificationId) => {
+    try {
+      await deleteNotification(notificationId);
+    } catch (error) {
+      console.error('Error deleting notification:', error);
+    }
+  };
 
   const renderNotifications = () => (
     <ScrollView 
@@ -436,71 +817,37 @@ export default function App() {
     >
       <Text style={styles.pageTitle}>Bildirimler</Text>
       
-      {/* Tagged Message Notification */}
-      <TouchableOpacity style={styles.notificationCardCompact} onPress={() => {}}>
-        <Text style={styles.notificationIconCompact}>💬</Text>
-        <View style={styles.notificationInfoCompact}>
-          <Text style={styles.notificationContentCompact}>
-            <Text style={styles.notificationBold}>Ahmet</Text> sizi bir mesajda etiketledi
-          </Text>
-          <Text style={styles.notificationTimeCompact}>1 saat önce</Text>
+      {notificationsData.length === 0 ? (
+        <View style={styles.emptyState}>
+          <Text style={styles.emptyStateText}>Henüz bildirim yok</Text>
         </View>
+      ) : (
+        notificationsData.map((notification) => (
+          <TouchableOpacity
+            key={notification.id}
+            style={[
+              styles.notificationCard,
+              !notification.read && styles.notificationCardUnread
+            ]}
+            onPress={() => handleNotificationClick(notification)}
+          >
+            <View style={styles.notificationContent}>
+              <View style={styles.notificationHeader}>
+                <Text style={styles.notificationTitle}>{notification.title}</Text>
+                <TouchableOpacity
+                  onPress={() => handleDeleteNotification(notification.id)}
+                  style={styles.deleteNotificationButton}
+                >
+                  <Text style={styles.deleteNotificationButtonText}>✕</Text>
       </TouchableOpacity>
-
-      {/* Event Reminder - 5 days */}
-      <TouchableOpacity style={styles.notificationCardCompact} onPress={() => {}}>
-        <Text style={styles.notificationIconCompact}>⚠️</Text>
-        <View style={styles.notificationInfoCompact}>
-          <Text style={styles.notificationContentCompact}>
-            <Text style={styles.notificationBold}>Kadıköy Gezisi</Text> için duyuru yapılmadı
-          </Text>
-          <Text style={styles.notificationTimeCompact}>3 saat önce</Text>
         </View>
-      </TouchableOpacity>
-
-      {/* Event Reminder - 1 day */}
-      <TouchableOpacity style={styles.notificationCardCompact} onPress={() => {}}>
-        <Text style={styles.notificationIconCompact}>🔔</Text>
-        <View style={styles.notificationInfoCompact}>
-          <Text style={styles.notificationContentCompact}>
-            <Text style={styles.notificationBold}>Tanışma Toplantısı</Text> yarın başlıyor
-          </Text>
-          <Text style={styles.notificationTimeCompact}>Dün</Text>
+              <Text style={styles.notificationMessage}>{notification.message}</Text>
+              <Text style={styles.notificationDate}>{getTimeAgo(notification.createdAt)}</Text>
         </View>
+            {!notification.read && <View style={styles.notificationUnreadDot} />}
       </TouchableOpacity>
-
-      {/* Tagged Message Notification 2 */}
-      <TouchableOpacity style={styles.notificationCardCompact} onPress={() => {}}>
-        <Text style={styles.notificationIconCompact}>💬</Text>
-        <View style={styles.notificationInfoCompact}>
-          <Text style={styles.notificationContentCompact}>
-            <Text style={styles.notificationBold}>Zeynep</Text> sizi bir mesajda etiketledi
-          </Text>
-          <Text style={styles.notificationTimeCompact}>2 gün önce</Text>
-        </View>
-      </TouchableOpacity>
-
-      {/* Backup Captain Reminder */}
-      <TouchableOpacity style={styles.notificationCardCompact} onPress={() => {}}>
-        <Text style={styles.notificationIconCompact}>🔔</Text>
-        <View style={styles.notificationInfoCompact}>
-          <Text style={styles.notificationContentCompact}>
-            <Text style={styles.notificationBold}>Teknik Eğitim 102</Text> için yedek kaptansınız
-          </Text>
-          <Text style={styles.notificationTimeCompact}>3 gün önce</Text>
-        </View>
-      </TouchableOpacity>
-
-      {/* New Member Notification */}
-      <TouchableOpacity style={styles.notificationCardCompact} onPress={() => {}}>
-        <Text style={styles.notificationIconCompact}>👋</Text>
-        <View style={styles.notificationInfoCompact}>
-          <Text style={styles.notificationContentCompact}>
-            Kulübe 3 yeni üye katıldı
-          </Text>
-          <Text style={styles.notificationTimeCompact}>4 gün önce</Text>
-        </View>
-      </TouchableOpacity>
+        ))
+      )}
     </ScrollView>
   );
 
@@ -543,7 +890,14 @@ export default function App() {
         </View>
 
         {/* Event Cards */}
-        {eventsData.map((event) => {
+        {eventsData
+          .sort((a, b) => {
+            // Sort by date chronologically (earliest first)
+            const dateA = a.date ? new Date(a.date) : new Date('9999-12-31');
+            const dateB = b.date ? new Date(b.date) : new Date('9999-12-31');
+            return dateA - dateB;
+          })
+          .map((event) => {
           const eventDate = event.date ? new Date(event.date) : null;
           const today = new Date();
           today.setHours(0, 0, 0, 0); // Reset time to start of day for accurate comparison
@@ -554,6 +908,15 @@ export default function App() {
             return null;
           }
           
+          // Filter by captain/co-captain if active
+          if (showCaptainOnly) {
+            const isCaptain = event.captain === currentUser?.name;
+            const isCoCaptain = event.coCaptain === currentUser?.name;
+            if (!isCaptain && !isCoCaptain) {
+              return null;
+            }
+          }
+          
           const dayNames = ['Pazar', 'Pazartesi', 'Salı', 'Çarşamba', 'Perşembe', 'Cuma', 'Cumartesi'];
           const monthNames = ['Ocak', 'Şubat', 'Mart', 'Nisan', 'Mayıs', 'Haziran', 'Temmuz', 'Ağustos', 'Eylül', 'Ekim', 'Kasım', 'Aralık'];
           
@@ -562,7 +925,7 @@ export default function App() {
               key={event.id}
               style={[
                 styles.eventCardLarge, 
-                { backgroundColor: event.hasImage ? event.color : '#999' },
+                { backgroundColor: (event.hasImage || event.imageUrl) ? '#1a1a1a' : '#999' },
                 isPastEvent && { opacity: 0.25 }
               ]}
               onPress={() => {
@@ -570,34 +933,34 @@ export default function App() {
                 navigateToPage('eventDetail');
               }}
             >
-              {event.hasImage && (
+              {(event.hasImage || event.imageUrl) && (
                 <>
-                  <View style={styles.imageWrapper}>
-                    <Image 
-                      source={require('./assets/placeholder_tanisma_toplantisi.jpg')} 
-                      style={styles.eventImage}
-                    />
-                  </View>
-                  <LinearGradient
-                    colors={[
-                      event.color, 
-                      event.color, 
-                      `${event.color}CC`, 
-                      `${event.color}99`, 
-                      `${event.color}4D`, 
-                      `${event.color}00`
-                    ]}
-                    locations={[0, 0.3, 0.5, 0.7, 0.85, 1]}
-                    start={{ x: 0, y: 0 }}
-                    end={{ x: 1, y: 0 }}
-                    style={styles.imageOpacityMask}
-                  />
+          <View style={styles.imageWrapper}>
+            <Image 
+                      source={{ uri: event.imageUrl }} 
+              style={styles.eventImage}
+            />
+          </View>
+          <LinearGradient
+                          colors={[
+                            'rgba(0, 0, 0, 0.7)', 
+                            'rgba(0, 0, 0, 0.6)', 
+                            'rgba(0, 0, 0, 0.4)', 
+                            'rgba(0, 0, 0, 0.2)', 
+                            'rgba(0, 0, 0, 0.05)', 
+                            'rgba(0, 0, 0, 0)'
+                          ]}
+            locations={[0, 0.3, 0.5, 0.7, 0.85, 1]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 0 }}
+            style={styles.imageOpacityMask}
+          />
                 </>
               )}
               {isPastEvent && (
                 <View style={styles.pastEventWhiteOverlay} />
               )}
-              <View style={styles.eventContentLarge}>
+          <View style={styles.eventContentLarge}>
                 <Text style={styles.eventNameLarge}>{event.name}</Text>
                 {eventDate && event.time ? (
                   <Text style={styles.eventDateTime}>
@@ -610,34 +973,50 @@ export default function App() {
                 ) : (
                   <Text style={styles.eventDateTime}>Tarih belirlenmedi</Text>
                 )}
-                {event.captain && (
-                  <View style={styles.captainBadge}>
-                    <Text style={styles.captainText}>Kaptan: {event.captain}</Text>
-                  </View>
+                
+                {/* Check if user is captain or co-captain */}
+                {(event.captain === currentUser?.name || event.coCaptain === currentUser?.name) && (
+            <View style={styles.captainBadge}>
+                    <Text style={styles.captainText}>
+                      {event.captain === currentUser?.name ? 'Kaptansın! ⚡' : 'Yedek kaptansın 🔄'}
+                    </Text>
+            </View>
                 )}
-                {event.isCaptain && (
-                  <View style={styles.captainBadge}>
-                    <Text style={styles.captainText}>Bu etkinlikte kaptansın! ⚡</Text>
-                  </View>
+                
+                {/* Show announcement status only if event is within 7 days */}
+                {(() => {
+                  if (!eventDate) return null;
+                  const daysUntilEvent = Math.ceil((eventDate - today) / (1000 * 60 * 60 * 24));
+                  if (daysUntilEvent >= 0 && daysUntilEvent < 7) {
+                    if (event.announced) {
+                      return (
+            <View style={styles.announcementBadgeInline}>
+              <Text style={styles.announcementBadgeInlineText}>✓ Duyuru yapıldı</Text>
+            </View>
+                      );
+                    } else {
+                      return (
+                        <View style={styles.announcementBadgeWarningInline}>
+                          <Text style={styles.announcementBadgeWarningInlineText}>⚠ Duyuru yapılmadı</Text>
+          </View>
+                      );
+                    }
+                  }
+                  return null;
+                })()}
+                
+                {/* Documents status tag - always visible */}
+                {event.documentsSubmitted ? (
+            <View style={styles.announcementBadgeInline}>
+                    <Text style={styles.announcementBadgeInlineText}>✓ Belgeler teslim edildi</Text>
+            </View>
+                ) : (
+                  <View style={styles.announcementBadgeWarningInline}>
+                    <Text style={styles.announcementBadgeWarningInlineText}>⚠ Belgeler teslim edilmedi</Text>
+          </View>
                 )}
-                {event.isBackupCaptain && (
-                  <View style={styles.backupCaptainBadge}>
-                    <Text style={styles.backupCaptainText}>Yedek kaptansın 🔄</Text>
-                  </View>
-                )}
-                {event.announced !== undefined && (
-                  event.announced ? (
-                    <View style={styles.announcementBadgeInline}>
-                      <Text style={styles.announcementBadgeInlineText}>✓ Duyuru yapıldı</Text>
-                    </View>
-                  ) : (
-                    <View style={styles.announcementBadgeWarningInline}>
-                      <Text style={styles.announcementBadgeWarningInlineText}>⚠ Duyuru yapılmadı</Text>
-                    </View>
-                  )
-                )}
-              </View>
-            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
           );
         })}
       </ScrollView>
@@ -662,171 +1041,56 @@ export default function App() {
           </TouchableOpacity>
         </View>
         
-        {/* Filter Buttons */}
-        <View style={styles.filterRow}>
-          <TouchableOpacity 
-            style={[styles.filterButton, showTaggedOnly && styles.filterButtonActive]}
-            onPress={() => setShowTaggedOnly(!showTaggedOnly)}
-          >
-            <Text style={[styles.filterButtonText, showTaggedOnly && styles.filterButtonTextActive]}>
-              Etiketlenilen
-            </Text>
-          </TouchableOpacity>
-          <TouchableOpacity 
-            style={[styles.filterButton, showUnreadOnly && styles.filterButtonActive]}
-            onPress={() => setShowUnreadOnly(!showUnreadOnly)}
-          >
-            <Text style={[styles.filterButtonText, showUnreadOnly && styles.filterButtonTextActive]}>
-              Okunmamış
-            </Text>
-          </TouchableOpacity>
+        {messagesData.length === 0 ? (
+          <View style={styles.emptyState}>
+            <Text style={styles.emptyStateText}>Henüz mesaj yok</Text>
         </View>
-
-        {/* Unread Message */}
+        ) : (
+          messagesData.map((message) => {
+            const messageDate = message.createdAt ? new Date(message.createdAt) : new Date();
+            const dayNames = ['Pazar', 'Pazartesi', 'Salı', 'Çarşamba', 'Perşembe', 'Cuma', 'Cumartesi'];
+            const monthNames = ['Ocak', 'Şubat', 'Mart', 'Nisan', 'Mayıs', 'Haziran', 'Temmuz', 'Ağustos', 'Eylül', 'Ekim', 'Kasım', 'Aralık'];
+            const senderUser = allUsers.find(u => u.name === message.sender);
+            
+            return (
         <TouchableOpacity 
+                key={message.id}
           style={styles.messageCard}
           onPress={() => {
-            setSelectedMessage({id: 1, sender: 'Ayşe', title: 'Gelecek hafta için ekipman kontrolü'});
+                  setSelectedMessage(message);
             navigateToPage('messageDetail');
           }}
         >
-          <View style={styles.unreadIndicator} />
+                <View style={styles.messageCardRow}>
+                  {senderUser?.profileImageUrl ? (
+                    <Image source={{ uri: senderUser.profileImageUrl }} style={styles.messageAvatarImage} />
+                  ) : (
+                    <View style={[styles.messageAvatar, { backgroundColor: getAvatarColor(message.sender) }]}>
+                      <Text style={styles.messageAvatarInitial}>{message.sender?.charAt(0) || '?'}</Text>
+            </View>
+                  )}
+                  <View style={styles.messageCardContent}>
           <View style={styles.messageHeader}>
-            <View style={[styles.userAvatar, { backgroundColor: '#FF6B6B' }]}>
-              <Text style={styles.avatarInitial}>A</Text>
-            </View>
-            <View style={styles.messageHeaderInfo}>
-              <View style={styles.messageTopRow}>
-                <Text style={styles.messageSender}>Ayşe</Text>
-                <Text style={styles.messageDate}>2 saat önce</Text>
-              </View>
-              <Text style={styles.messageTitle}>Gelecek hafta için ekipman kontrolü</Text>
-            </View>
-          </View>
-          <Text style={styles.messageContent} numberOfLines={3}>
-            Merhabalar! Önümüzdeki hafta yapacağımız çekim için ekipmanları kontrol etmemiz gerekiyor. Özellikle lens ve tripod sayısını netleştirmemiz lazım. Herkes elindeki malzemelerin listesini paylaşabilir mi?
+                      <Text style={styles.messageTitle}>{message.title}</Text>
+                      <Text style={styles.messageDate}>
+                        {getTimeAgo(message.createdAt)}
           </Text>
-          <View style={styles.messageFooter}>
-            <Text style={styles.replyCount}>💬 12 yanıt</Text>
+          </View>
+                    <Text style={styles.messageSender}>Gönderen: {message.sender}</Text>
+                    <Text style={styles.messagePreview} numberOfLines={2}>
+                      {message.content}
+          </Text>
+                    {message.ccUsers && message.ccUsers.length > 0 && (
+                      <Text style={styles.messageCc}>
+                        CC: {message.ccUsers.join(', ')}
+          </Text>
+                    )}
+          </View>
           </View>
         </TouchableOpacity>
-
-        {/* Read Message */}
-        <TouchableOpacity 
-          style={styles.messageCard}
-          onPress={() => {
-            setSelectedMessage({id: 2, sender: 'Emre', title: 'Fotoğraf yarışması başvuruları'});
-            navigateToPage('messageDetail');
-          }}
-        >
-          <View style={styles.messageHeader}>
-            <View style={[styles.userAvatar, { backgroundColor: '#4ECDC4' }]}>
-              <Text style={styles.avatarInitial}>E</Text>
-            </View>
-            <View style={styles.messageHeaderInfo}>
-              <View style={styles.messageTopRow}>
-                <Text style={styles.messageSender}>Emre</Text>
-                <Text style={styles.messageDate}>5 saat önce</Text>
-              </View>
-              <Text style={styles.messageTitle}>Fotoğraf yarışması başvuruları</Text>
-            </View>
-          </View>
-          <Text style={styles.messageContent} numberOfLines={3}>
-            Arkadaşlar, şehir genelindeki fotoğraf yarışmasına toplu başvuru yapmayı düşünüyoruz. Katılmak isteyen varsa bu akşam saat 20:00'de online toplantıda buluşalım. Detayları orada konuşuruz.
-          </Text>
-          <View style={styles.messageFooter}>
-            <Text style={styles.replyCount}>💬 8 yanıt</Text>
-          </View>
-        </TouchableOpacity>
-
-        {/* Unread Tagged Message */}
-        <TouchableOpacity 
-          style={styles.messageCard}
-          onPress={() => {
-            setSelectedMessage({id: 3, sender: 'Zeynep', title: 'Lightroom eğitimi kaydı'});
-            navigateToPage('messageDetail');
-          }}
-        >
-          <View style={styles.unreadIndicator} />
-          <View style={styles.messageHeader}>
-            <View style={[styles.userAvatar, { backgroundColor: '#95E1D3' }]}>
-              <Text style={styles.avatarInitial}>Z</Text>
-            </View>
-            <View style={styles.messageHeaderInfo}>
-              <View style={styles.messageTopRow}>
-                <Text style={styles.messageSender}>Zeynep</Text>
-                <Text style={styles.messageDate}>Dün</Text>
-              </View>
-              <Text style={styles.messageTitle}>Lightroom eğitimi kaydı</Text>
-            </View>
-          </View>
-          <Text style={styles.messageContent} numberOfLines={3}>
-            Geçen hafta yaptığımız Lightroom eğitiminin kaydını Drive'a yükledim. @Mert eğitim materyallerini de paylaşabilir misin? Katılamayanlar için çok faydalı olacağını düşünüyorum.
-          </Text>
-          <View style={styles.messageFooter}>
-            <Text style={styles.replyCount}>💬 25 yanıt</Text>
-            <View style={styles.taggedBadge}>
-              <Text style={styles.taggedBadgeText}>@ Etiketlendiniz</Text>
-            </View>
-          </View>
-        </TouchableOpacity>
-
-        {/* Read Message */}
-        <TouchableOpacity 
-          style={styles.messageCard}
-          onPress={() => {
-            setSelectedMessage({id: 4, sender: 'Mehmet', title: 'Yeni üye tanıtımı'});
-            navigateToPage('messageDetail');
-          }}
-        >
-          <View style={styles.messageHeader}>
-            <View style={[styles.userAvatar, { backgroundColor: '#FFB6B9' }]}>
-              <Text style={styles.avatarInitial}>M</Text>
-            </View>
-            <View style={styles.messageHeaderInfo}>
-              <View style={styles.messageTopRow}>
-                <Text style={styles.messageSender}>Mehmet</Text>
-                <Text style={styles.messageDate}>2 gün önce</Text>
-              </View>
-              <Text style={styles.messageTitle}>Yeni üye tanıtımı</Text>
-            </View>
-          </View>
-          <Text style={styles.messageContent} numberOfLines={3}>
-            Merhaba arkadaşlar! Bu hafta kulübümüze 3 yeni üye katıldı. Herkesi tanışma toplantısına davet ediyoruz. Yeni üyelerimize hoş geldiniz diyoruz!
-          </Text>
-          <View style={styles.messageFooter}>
-            <Text style={styles.replyCount}>💬 15 yanıt</Text>
-          </View>
-        </TouchableOpacity>
-
-        {/* Unread Message */}
-        <TouchableOpacity 
-          style={styles.messageCard}
-          onPress={() => {
-            setSelectedMessage({id: 5, sender: 'Selin', title: 'Fotoğraf sergisi önerisi'});
-            navigateToPage('messageDetail');
-          }}
-        >
-          <View style={styles.unreadIndicator} />
-          <View style={styles.messageHeader}>
-            <View style={[styles.userAvatar, { backgroundColor: '#A8E6CF' }]}>
-              <Text style={styles.avatarInitial}>S</Text>
-            </View>
-            <View style={styles.messageHeaderInfo}>
-              <View style={styles.messageTopRow}>
-                <Text style={styles.messageSender}>Selin</Text>
-                <Text style={styles.messageDate}>3 gün önce</Text>
-              </View>
-              <Text style={styles.messageTitle}>Fotoğraf sergisi önerisi</Text>
-            </View>
-          </View>
-          <Text style={styles.messageContent} numberOfLines={3}>
-            Şehir merkezinde açılan yeni fotoğraf sergisini gördünüz mü? Çok etkileyici işler var. Toplu olarak gidip inceleyebiliriz. Ne dersiniz?
-          </Text>
-          <View style={styles.messageFooter}>
-            <Text style={styles.replyCount}>💬 7 yanıt</Text>
-          </View>
-        </TouchableOpacity>
+            );
+          })
+        )}
       </ScrollView>
     );
   };
@@ -843,8 +1107,8 @@ export default function App() {
         <View style={styles.settingsSection}>
           <View style={styles.settingItem}>
             <View style={styles.settingInfo}>
-              <Text style={styles.settingTitle}>Karanlık Mod</Text>
-              <Text style={styles.settingDescription}>Uygulamayı karanlık temada kullan</Text>
+              <Text style={styles.settingTitle}>Gereksiz Buton</Text>
+              <Text style={styles.settingDescription}>Hiçbir şey yapmayan bir buton</Text>
             </View>
             <TouchableOpacity 
               style={[styles.toggle, darkMode && styles.toggleActive]}
@@ -932,8 +1196,8 @@ export default function App() {
 
     return (
       <View style={styles.calendarFullScreen}>
-        <Text style={styles.pageTitle}>Takvim</Text>
-        
+      <Text style={styles.pageTitle}>Takvim</Text>
+      
         {/* Calendar Header - Month Navigation */}
         <View style={styles.calendarHeader}>
           <TouchableOpacity onPress={goToPreviousMonth} style={styles.calendarNavButton}>
@@ -945,7 +1209,7 @@ export default function App() {
           <TouchableOpacity onPress={goToNextMonth} style={styles.calendarNavButton}>
             <Text style={styles.calendarNavButtonText}>›</Text>
           </TouchableOpacity>
-        </View>
+      </View>
 
         {/* Calendar Grid - Full Screen */}
         <View style={styles.calendarContainerFull}>
@@ -962,36 +1226,52 @@ export default function App() {
           <View style={styles.calendarDaysGridFull}>
             {days.map((day, index) => {
               const event = getEventForDay(day);
-              const eventColor = event ? (event.hasImage ? event.color : '#999') : null;
+              const eventColor = event ? (event.hasImage || event.imageUrl ? '#1a1a1a' : '#999') : null;
               return (
                 <TouchableOpacity
                   key={index}
                   style={[
                     styles.calendarDayCellFull,
                     !day && styles.calendarDayCellEmpty,
-                    event && { backgroundColor: eventColor },
+                    event && !event.imageUrl && { backgroundColor: eventColor },
                   ]}
                   onPress={() => handleDayPress(day)}
                   disabled={!day}
                 >
                   {day ? (
-                    <View style={styles.calendarDayCellContentFull}>
-                      <Text style={[
-                        styles.calendarDayTextFull,
-                        event && styles.calendarDayTextWithEvent,
-                        isToday(day) && styles.calendarDayTextTodayBold,
-                      ]}>
-                        {day}
-                      </Text>
-                      {event && (
-                        <Text style={styles.calendarEventNameInCell} numberOfLines={2}>
-                          {event.name}
+                    <>
+                      {event && event.imageUrl && (
+                        <>
+                          <Image 
+                            source={{ uri: event.imageUrl }}
+                            style={styles.calendarEventImage}
+                          />
+                          <LinearGradient
+                            colors={['rgba(0,0,0,0.3)', 'rgba(0,0,0,0.6)']}
+                            start={{ x: 0, y: 0 }}
+                            end={{ x: 0, y: 1 }}
+                            style={styles.calendarEventGradient}
+                          />
+                        </>
+                      )}
+                      <View style={styles.calendarDayCellContentFull}>
+                        <Text style={[
+                          styles.calendarDayTextFull,
+                          event && styles.calendarDayTextWithEvent,
+                          isToday(day) && styles.calendarDayTextTodayBold,
+                        ]}>
+                          {day}
                         </Text>
-                      )}
-                      {isToday(day) && !event && (
-                        <View style={styles.todayIndicator} />
-                      )}
-                    </View>
+                        {event && (
+                          <Text style={styles.calendarEventNameInCell} numberOfLines={2}>
+                            {event.name}
+                          </Text>
+                        )}
+                        {isToday(day) && !event && (
+                          <View style={styles.todayIndicator} />
+                        )}
+                      </View>
+                    </>
                   ) : null}
                 </TouchableOpacity>
               );
@@ -1002,7 +1282,67 @@ export default function App() {
     );
   };
 
-  const renderProfile = () => (
+  const renderProfile = () => {
+    const handleLogout = async () => {
+      try {
+        await logout();
+        try {
+          if (currentUser?.id) {
+            await removePushToken(currentUser.id);
+          }
+        } catch (e) {
+          console.log('Push token remove failed:', e?.message);
+        }
+        setIsAuthenticated(false);
+        setCurrentUser(null);
+        setShowMainPage(false);
+      } catch (error) {
+        console.error('Logout error:', error);
+      }
+    };
+
+    const handlePickProfileImage = async () => {
+      try {
+        // Request permissions
+        const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+        if (status !== 'granted') {
+          Alert.alert('İzin Gerekli', 'Galeriye erişim izni vermeniz gerekiyor.');
+          return;
+        }
+
+        // Launch image picker
+        const result = await ImagePicker.launchImageLibraryAsync({
+          mediaTypes: ImagePicker.MediaTypeOptions.Images,
+          allowsEditing: true,
+          aspect: [1, 1],
+          quality: 0.8,
+        });
+
+        if (!result.canceled && result.assets[0]) {
+          setUploadingImage(true);
+          try {
+            const imageUri = result.assets[0].uri;
+            await uploadProfileImage(currentUser.id, imageUri);
+            
+            // Update local state
+            setProfileImageUri(imageUri);
+            
+            Alert.alert('Başarılı', 'Profil fotoğrafı güncellendi!');
+          } catch (error) {
+            console.error('Error uploading image:', error);
+            Alert.alert('Hata', 'Fotoğraf yüklenirken bir hata oluştu.');
+          } finally {
+            setUploadingImage(false);
+          }
+        }
+      } catch (error) {
+        console.error('Error picking image:', error);
+      }
+    };
+
+    const profileImage = profileImageUri || currentUser?.profileImageUrl;
+
+    return (
     <ScrollView 
       style={styles.dashboardScrollView}
       contentContainerStyle={styles.dashboardContent}
@@ -1010,66 +1350,96 @@ export default function App() {
     >
       <Text style={styles.pageTitle}>Profil</Text>
       
-      <View style={styles.profileHeader}>
-        <View style={styles.profilePictureContainer}>
-          <View style={styles.profilePicture} />
-          <TouchableOpacity style={styles.changePictureButton}>
-            <Image source={require('./assets/camera.png')} style={styles.changePictureIcon} />
+        {/* Large Circular Profile Picture */}
+        <View style={styles.profilePictureSection}>
+          {profileImage ? (
+            <Image source={{ uri: profileImage }} style={styles.profilePictureLarge} />
+          ) : (
+            <View style={styles.profilePictureLarge} />
+          )}
+          <TouchableOpacity 
+            style={styles.changePictureButtonLarge}
+            onPress={handlePickProfileImage}
+            disabled={uploadingImage}
+          >
+            <Image source={require('./assets/camera.png')} style={styles.changePictureIconLarge} />
           </TouchableOpacity>
         </View>
         
-        <View style={styles.profileInfo}>
-          <Text style={styles.profileName}>Mert</Text>
-          <Text style={styles.profileRole}>Yönetim Kurulu Üyesi</Text>
-        </View>
-      </View>
+        {uploadingImage && (
+          <Text style={styles.uploadingText}>Yükleniyor...</Text>
+        )}
 
-      <View style={styles.profileSection}>
-        <View style={styles.profileSectionHeader}>
-          <Text style={styles.profileSectionTitle}>Kişisel Bilgiler</Text>
-          <TouchableOpacity>
-            <Image source={require('./assets/edit.png')} style={styles.editIcon} />
+        {/* User Name */}
+        <Text style={styles.profileNameLarge}>{currentUser?.name || 'Kullanıcı'}</Text>
+
+        {/* Sign Out Button */}
+        <TouchableOpacity style={styles.signOutButton} onPress={handleLogout}>
+          <Text style={styles.signOutButtonText}>Çıkış Yap</Text>
           </TouchableOpacity>
-        </View>
-        
-        <View style={styles.profileField}>
-          <Text style={styles.profileFieldLabel}>E-posta</Text>
-          <Text style={styles.profileFieldValue}>mert@itufk.com</Text>
-        </View>
-        
-        <View style={styles.profileField}>
-          <Text style={styles.profileFieldLabel}>Telefon</Text>
-          <Text style={styles.profileFieldValue}>+90 555 123 4567</Text>
-        </View>
-        
-        <View style={styles.profileField}>
-          <Text style={styles.profileFieldLabel}>Üyelik Tarihi</Text>
-          <Text style={styles.profileFieldValue}>15 Eylül 2024</Text>
-        </View>
-      </View>
 
-      <View style={styles.profileSection}>
-        <Text style={styles.profileSectionTitle}>İstatistikler</Text>
-        
-        <View style={styles.statsRow}>
-          <View style={styles.statItem}>
-            <Text style={styles.statValue}>12</Text>
-            <Text style={styles.statLabel}>Etkinlik</Text>
-          </View>
-          <View style={styles.statItem}>
-            <Text style={styles.statValue}>5</Text>
-            <Text style={styles.statLabel}>Kaptan</Text>
-          </View>
-          <View style={styles.statItem}>
-            <Text style={styles.statValue}>48</Text>
-            <Text style={styles.statLabel}>Mesaj</Text>
-          </View>
+        {/* Members List */}
+        <View style={styles.membersSection}>
+          <Text style={styles.membersSectionTitle}>Üyeler</Text>
+          {allUsers.map((user) => (
+            <View key={user.id} style={styles.memberCard}>
+              {user.profileImageUrl ? (
+                <Image source={{ uri: user.profileImageUrl }} style={styles.memberAvatar} />
+              ) : (
+                <View style={styles.memberAvatar}>
+                  <Text style={styles.memberInitial}>{user.name?.charAt(0) || 'U'}</Text>
         </View>
-      </View>
+              )}
+              <Text style={styles.memberName}>{user.name}</Text>
+        </View>
+          ))}
+        </View>
     </ScrollView>
   );
+  };
 
-  const renderMessageDetail = () => (
+  const getTimeAgo = (dateString) => {
+    if (!dateString) return 'Bilinmiyor';
+    
+    const now = new Date();
+    const date = new Date(dateString);
+    const diffMs = now - date;
+    const diffSecs = Math.floor(diffMs / 1000);
+    const diffMins = Math.floor(diffSecs / 60);
+    const diffHours = Math.floor(diffMins / 60);
+    const diffDays = Math.floor(diffHours / 24);
+    
+    if (diffSecs < 10) return 'Az önce';
+    if (diffSecs < 60) return `${diffSecs} saniye önce`;
+    if (diffMins < 60) return `${diffMins} dakika önce`;
+    if (diffHours < 24) return `${diffHours} saat önce`;
+    if (diffDays === 1) return 'Dün';
+    if (diffDays === 2) return 'İki gün önce';
+    if (diffDays < 7) return `${diffDays} gün önce`;
+    if (diffDays < 14) return 'Bir hafta önce';
+    if (diffDays < 30) return `${Math.floor(diffDays / 7)} hafta önce`;
+    
+    return `${date.getDate()}/${date.getMonth() + 1}/${date.getFullYear()}`;
+  };
+
+  const getAvatarColor = (name) => {
+    const colors = ['#FF6B6B', '#4ECDC4', '#95E1D3', '#FFB6B9', '#FFA500', '#9B59B6', '#3498DB'];
+    const index = (name?.charCodeAt(0) || 0) % colors.length;
+    return colors[index];
+  };
+
+  const renderMessageDetail = () => {
+    if (!selectedMessage) {
+      return (
+        <View style={styles.emptyState}>
+          <Text style={styles.emptyStateText}>Mesaj bulunamadı</Text>
+          </View>
+      );
+    }
+
+    const senderUser = allUsers.find(u => u.name === selectedMessage.sender);
+
+    return (
     <ScrollView 
       style={styles.dashboardScrollView}
       contentContainerStyle={styles.dashboardContent}
@@ -1077,80 +1447,322 @@ export default function App() {
     >
       <View style={styles.messageDetailCard}>
         <View style={styles.messageHeader}>
-          <View style={[styles.userAvatar, { backgroundColor: '#FF6B6B' }]}>
-            <Text style={styles.avatarInitial}>{selectedMessage?.sender?.charAt(0) || 'A'}</Text>
+            {senderUser?.profileImageUrl ? (
+              <Image source={{ uri: senderUser.profileImageUrl }} style={styles.userAvatarImage} />
+            ) : (
+              <View style={[styles.userAvatar, { backgroundColor: getAvatarColor(selectedMessage.sender) }]}>
+                <Text style={styles.avatarInitial}>{selectedMessage.sender?.charAt(0) || '?'}</Text>
           </View>
+            )}
           <View style={styles.messageHeaderInfo}>
-            <Text style={styles.messageSender}>{selectedMessage?.sender || 'Ayşe'}</Text>
-            <Text style={styles.messageDate}>2 saat önce</Text>
+              <Text style={styles.messageSender}>{selectedMessage.sender}</Text>
+              <Text style={styles.messageDate}>{getTimeAgo(selectedMessage.createdAt)}</Text>
           </View>
+            {selectedMessage.senderId === currentUser?.id && (
+              <TouchableOpacity
+                onPress={() => handleDeleteMessage(selectedMessage.id)}
+                style={styles.deleteMessageButton}
+              >
+                <Text style={styles.deleteMessageButtonText}>✕</Text>
+              </TouchableOpacity>
+            )}
         </View>
         
-        <Text style={styles.messageDetailTitle}>{selectedMessage?.title || 'Gelecek hafta için ekipman kontrolü'}</Text>
-        
-        <Text style={styles.messageDetailContent}>
-          Merhabalar! Önümüzdeki hafta yapacağımız çekim için ekipmanları kontrol etmemiz gerekiyor. Özellikle lens ve tripod sayısını netleştirmemiz lazım. Herkes elindeki malzemelerin listesini paylaşabilir mi?
+          <Text style={styles.messageDetailTitle}>{selectedMessage.title}</Text>
+          
+          <Text style={styles.messageDetailContent}>{selectedMessage.content}</Text>
+
+          {selectedMessage.ccUsers && selectedMessage.ccUsers.length > 0 && (
+            <Text style={styles.messageCcDetail}>
+              CC: {selectedMessage.ccUsers.join(', ')}
         </Text>
+          )}
       </View>
 
       <View style={styles.repliesSection}>
-        <Text style={styles.repliesSectionTitle}>Yanıtlar (12)</Text>
-        
-        <View style={styles.replyCard}>
+          <Text style={styles.repliesSectionTitle}>
+            Yanıtlar ({repliesData.length})
+          </Text>
+          
+          {repliesData.length > 0 && (
+            repliesData.map((reply) => {
+              const replyUser = allUsers.find(u => u.name === reply.sender);
+              return (
+                <View key={reply.id} style={styles.replyCard}>
           <View style={styles.replyHeader}>
-            <View style={[styles.userAvatarSmall, { backgroundColor: '#4ECDC4' }]}>
-              <Text style={styles.avatarInitialSmall}>E</Text>
+                    {replyUser?.profileImageUrl ? (
+                      <Image source={{ uri: replyUser.profileImageUrl }} style={styles.userAvatarSmallImage} />
+                    ) : (
+                      <View style={[styles.userAvatarSmall, { backgroundColor: getAvatarColor(reply.sender) }]}>
+                        <Text style={styles.avatarInitialSmall}>{reply.sender?.charAt(0) || '?'}</Text>
             </View>
+                    )}
             <View style={styles.replyHeaderInfo}>
-              <Text style={styles.replySender}>Emre</Text>
-              <Text style={styles.replyDate}>1 saat önce</Text>
+                      <Text style={styles.replySender}>{reply.sender}</Text>
+                      <Text style={styles.replyDate}>{getTimeAgo(reply.createdAt)}</Text>
             </View>
+                    {reply.senderId === currentUser?.id && (
+                      <TouchableOpacity
+                        onPress={() => handleDeleteReply(reply.id)}
+                        style={styles.deleteReplyButton}
+                      >
+                        <Text style={styles.deleteReplyButtonText}>✕</Text>
+                      </TouchableOpacity>
+                    )}
           </View>
-          <Text style={styles.replyContent}>Bende 2 tripod var, getirebilirim.</Text>
+                  <Text style={styles.replyContent}>{reply.content}</Text>
         </View>
-
-        <View style={styles.replyCard}>
-          <View style={styles.replyHeader}>
-            <View style={[styles.userAvatarSmall, { backgroundColor: '#95E1D3' }]}>
-              <Text style={styles.avatarInitialSmall}>Z</Text>
-            </View>
-            <View style={styles.replyHeaderInfo}>
-              <Text style={styles.replySender}>Zeynep</Text>
-              <Text style={styles.replyDate}>45 dakika önce</Text>
-            </View>
-          </View>
-          <Text style={styles.replyContent}>Ben de lens setimi getireceğim. 50mm ve 85mm var.</Text>
-        </View>
-
-        <View style={styles.replyCard}>
-          <View style={styles.replyHeader}>
-            <View style={[styles.userAvatarSmall, { backgroundColor: '#FFB6B9' }]}>
-              <Text style={styles.avatarInitialSmall}>M</Text>
-            </View>
-            <View style={styles.replyHeaderInfo}>
-              <Text style={styles.replySender}>Mehmet</Text>
-              <Text style={styles.replyDate}>30 dakika önce</Text>
-            </View>
-          </View>
-          <Text style={styles.replyContent}>Harika! Ben de reflektör ve ışık ekipmanlarını hazırlayayım.</Text>
-        </View>
+              );
+            })
+          )}
       </View>
 
       <View style={styles.replyInputContainer}>
+          <View style={{ flex: 1 }}>
         <TextInput
           style={styles.replyInput}
           placeholder="Yanıt yaz..."
           placeholderTextColor="#999"
           multiline
-        />
-        <TouchableOpacity style={styles.sendButton}>
+              value={replyContent}
+              onChangeText={handleReplyTextChange}
+            />
+            
+            {/* Mention Suggestions Dropdown */}
+            {showMentionSuggestions && (
+              <View style={styles.mentionSuggestionsContainer}>
+                <ScrollView style={styles.mentionSuggestionsList} nestedScrollEnabled={true}>
+                  {getFilteredUsers().map((user) => (
+                    <TouchableOpacity
+                      key={user.id}
+                      style={styles.mentionSuggestionItem}
+                      onPress={() => insertMention(user.name)}
+                    >
+                      <View style={[styles.mentionAvatar, { backgroundColor: getAvatarColor(user.name) }]}>
+                        <Text style={styles.mentionAvatarText}>{user.name.charAt(0)}</Text>
+                      </View>
+                      <Text style={styles.mentionSuggestionText}>{user.name}</Text>
+                    </TouchableOpacity>
+                  ))}
+                  {getFilteredUsers().length === 0 && (
+                    <View style={styles.mentionSuggestionEmpty}>
+                      <Text style={styles.mentionSuggestionEmptyText}>Kullanıcı bulunamadı</Text>
+                    </View>
+                  )}
+                </ScrollView>
+              </View>
+            )}
+          </View>
+          <TouchableOpacity 
+            style={styles.sendButton}
+            onPress={handleSendReply}
+            disabled={!replyContent.trim()}
+          >
           <Image source={require('./assets/send.png')} style={styles.sendIcon} />
         </TouchableOpacity>
       </View>
     </ScrollView>
   );
+  };
 
-  const renderMessageCreate = () => (
+  const toggleCCUser = (userName) => {
+    if (ccUsers.includes(userName)) {
+      setCcUsers(ccUsers.filter(name => name !== userName));
+    } else {
+      setCcUsers([...ccUsers, userName]);
+    }
+  };
+
+  const handleSendMessage = async () => {
+    if (!messageTitle.trim() || !messageContent.trim()) {
+      Alert.alert('Uyarı', 'Lütfen başlık ve içerik alanlarını doldurun.');
+      return;
+    }
+
+    try {
+      const messageId = await createMessage({
+        title: messageTitle.trim(),
+        content: messageContent.trim(),
+        sender: currentUser?.name || 'Anonim',
+        senderId: currentUser?.id || '',
+        ccUsers: ccUsers,
+      });
+
+      // Notify CC'd users
+      if (ccUsers.length > 0) {
+        await notifyMessageCCUsers(ccUsers, {
+          title: messageTitle.trim(),
+          sender: currentUser?.name || 'Anonim',
+          messageId: messageId
+        }, allUsers);
+      }
+
+      showToastNotification('Mesaj oluşturuldu');
+      setMessageTitle('');
+      setMessageContent('');
+      setCcUsers([]);
+      navigateToPage('messages');
+    } catch (error) {
+      console.error('Error sending message:', error);
+      Alert.alert('Hata', 'Mesaj gönderilirken bir hata oluştu.');
+    }
+  };
+
+  // Extract @mentions from text
+  const extractMentions = (text) => {
+    const mentionRegex = /@(\w+(?:\s+\w+)?)/g;
+    const mentions = [];
+    let match;
+    
+    while ((match = mentionRegex.exec(text)) !== null) {
+      const mentionedName = match[1];
+      // Check if this user exists
+      const user = allUsers.find(u => u.name.toLowerCase() === mentionedName.toLowerCase());
+      if (user && !mentions.includes(user.name)) {
+        mentions.push(user.name);
+      }
+    }
+    
+    return mentions;
+  };
+
+  const handleReplyTextChange = (text) => {
+    setReplyContent(text);
+
+    // Check if user is typing a mention
+    const lastAtSymbol = text.lastIndexOf('@');
+    
+    if (lastAtSymbol !== -1) {
+      const textAfterAt = text.substring(lastAtSymbol + 1);
+      const nextSpace = textAfterAt.indexOf(' ');
+      
+      // If there's no space after @, we're still typing the mention
+      if (nextSpace === -1 || nextSpace > textAfterAt.length) {
+        const currentMention = textAfterAt;
+        setMentionFilter(currentMention);
+        setMentionCursorPosition(lastAtSymbol);
+        setShowMentionSuggestions(true);
+      } else {
+        setShowMentionSuggestions(false);
+      }
+    } else {
+      setShowMentionSuggestions(false);
+    }
+  };
+
+  const insertMention = (userName) => {
+    const beforeMention = replyContent.substring(0, mentionCursorPosition);
+    const afterMention = replyContent.substring(mentionCursorPosition + 1 + mentionFilter.length);
+    
+    const newText = `${beforeMention}@${userName} ${afterMention}`;
+    setReplyContent(newText);
+    setShowMentionSuggestions(false);
+  };
+
+  const getFilteredUsers = () => {
+    if (!mentionFilter) return allUsers.filter(u => u.id !== currentUser?.id);
+    
+    return allUsers.filter(u => 
+      u.id !== currentUser?.id && 
+      u.name.toLowerCase().startsWith(mentionFilter.toLowerCase())
+    );
+  };
+
+  const handleSendReply = async () => {
+    if (!replyContent.trim() || !selectedMessage?.id) {
+      return;
+    }
+
+    try {
+      await createReply(selectedMessage.id, {
+        content: replyContent.trim(),
+        sender: currentUser?.name || 'Anonim',
+        senderId: currentUser?.id || '',
+      });
+
+      // Notify tagged users only (removed message owner notification)
+      const taggedUsers = extractMentions(replyContent);
+      if (taggedUsers.length > 0) {
+        await notifyTaggedUsers(
+          taggedUsers,
+          {
+            sender: currentUser?.name || 'Anonim',
+            senderId: currentUser?.id || '',
+            messageId: selectedMessage.id
+          },
+          selectedMessage.title,
+          allUsers
+        );
+      }
+
+      // Reset reply input
+      setReplyContent('');
+      // Auto-insert original poster's tag for next reply
+      if (selectedMessage.sender && selectedMessage.sender !== currentUser?.name) {
+        setTimeout(() => {
+          setReplyContent(`@${selectedMessage.sender} `);
+        }, 100);
+      } else {
+        setReplyContent('');
+      }
+    } catch (error) {
+      console.error('Error sending reply:', error);
+      Alert.alert('Hata', 'Yanıt gönderilirken bir hata oluştu.');
+    }
+  };
+
+  const handleDeleteMessage = async (messageId) => {
+    Alert.alert(
+      'Mesajı Sil',
+      'Bu mesajı silmek istediğinizden emin misiniz? Tüm yanıtlar da silinecektir.',
+      [
+        { text: 'İptal', style: 'cancel' },
+        {
+          text: 'Sil',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await deleteMessage(messageId);
+              showToastNotification('Mesaj silindi');
+              navigateToPage('messages');
+            } catch (error) {
+              console.error('Error deleting message:', error);
+              Alert.alert('Hata', 'Mesaj silinirken bir hata oluştu.');
+            }
+          }
+        }
+      ]
+    );
+  };
+
+  const handleDeleteReply = async (replyId) => {
+    if (!selectedMessage?.id) return;
+
+    Alert.alert(
+      'Yanıtı Sil',
+      'Bu yanıtı silmek istediğinizden emin misiniz?',
+      [
+        { text: 'İptal', style: 'cancel' },
+        {
+          text: 'Sil',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await deleteReply(selectedMessage.id, replyId);
+              showToastNotification('Yanıt silindi');
+            } catch (error) {
+              console.error('Error deleting reply:', error);
+              Alert.alert('Hata', 'Yanıt silinirken bir hata oluştu.');
+            }
+          }
+        }
+      ]
+    );
+  };
+
+  const renderMessageCreate = () => {
+    return (
+      <View style={{ flex: 1 }}>
     <ScrollView 
       style={styles.dashboardScrollView}
       contentContainerStyle={styles.dashboardContent}
@@ -1164,6 +1776,8 @@ export default function App() {
           style={styles.formInput}
           placeholder="Mesaj başlığı..."
           placeholderTextColor="#999"
+              value={messageTitle}
+              onChangeText={setMessageTitle}
         />
       </View>
 
@@ -1175,41 +1789,108 @@ export default function App() {
           placeholderTextColor="#999"
           multiline
           numberOfLines={8}
+              value={messageContent}
+              onChangeText={setMessageContent}
         />
       </View>
 
-      <View style={styles.createFormActions}>
-        <TouchableOpacity style={styles.attachButton}>
-          <Image source={require('./assets/attach.png')} style={styles.attachIcon} />
-          <Text style={styles.attachButtonText}>Dosya Ekle</Text>
+          <View style={styles.createFormSection}>
+            <Text style={styles.formLabel}>CC (İletilecek Kullanıcılar)</Text>
+            <TouchableOpacity 
+              style={styles.formInput}
+              onPress={() => setShowCCPicker(true)}
+            >
+              <Text style={ccUsers.length > 0 ? styles.datePickerText : styles.datePickerPlaceholder}>
+                {ccUsers.length > 0 ? ccUsers.join(', ') : 'Kullanıcı seç (isteğe bağlı)'}
+              </Text>
         </TouchableOpacity>
-        
-        <TouchableOpacity style={styles.attachButton}>
-          <Image source={require('./assets/image.png')} style={styles.attachIcon} />
-          <Text style={styles.attachButtonText}>Resim Ekle</Text>
+          </View>
+
+          <TouchableOpacity style={styles.submitButton} onPress={handleSendMessage}>
+            <Text style={styles.submitButtonText}>Mesaj Oluştur</Text>
+          </TouchableOpacity>
+        </ScrollView>
+
+        {/* CC Users Picker Modal */}
+        {showCCPicker && (
+          <View style={styles.datePickerOverlay}>
+            <TouchableOpacity 
+              style={styles.datePickerBackdrop}
+              activeOpacity={1}
+              onPress={() => setShowCCPicker(false)}
+            />
+            <View style={styles.datePickerModal}>
+              <View style={styles.datePickerHeader}>
+                <Text style={styles.datePickerTitle}>Kullanıcı Seç (CC)</Text>
+                <TouchableOpacity onPress={() => setShowCCPicker(false)}>
+                  <Image source={require('./assets/close.png')} style={styles.datePickerCloseIcon} />
         </TouchableOpacity>
       </View>
-
-      <TouchableOpacity style={styles.submitButton}>
-        <Text style={styles.submitButtonText}>Mesajı Gönder</Text>
+              <ScrollView style={styles.datePickerCalendar}>
+                {allUsers.map((user) => {
+                  // Don't show current user in CC list
+                  if (user.id === currentUser?.id) return null;
+                  
+                  const isSelected = ccUsers.includes(user.name);
+                  return (
+                    <TouchableOpacity
+                      key={user.id}
+                      style={[
+                        styles.datePickerOption,
+                        isSelected && styles.datePickerOptionSelected
+                      ]}
+                      onPress={() => toggleCCUser(user.name)}
+                    >
+                      <Text style={[
+                        styles.datePickerOptionText,
+                        isSelected && styles.datePickerOptionTextSelected
+                      ]}>
+                        {user.name} {isSelected && '✓'}
+                      </Text>
       </TouchableOpacity>
+                  );
+                })}
     </ScrollView>
-  );
+              <TouchableOpacity 
+                style={styles.submitButton}
+                onPress={() => setShowCCPicker(false)}
+              >
+                <Text style={styles.submitButtonText}>Tamam</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
+      </View>
+    );
+  };
 
   const renderEventCreate = () => {
-    const handleCreateEvent = () => {
+    const handleCreateEvent = async () => {
       if (!eventName.trim()) {
         setEventNameError(true);
         return;
       }
-      // Here you would create the event
-      // For now, just reset form and navigate back
-      setEventName('');
-      setEventDate(null);
-      setEventCaptain('');
-      setEventBackupCaptain('');
-      setEventNameError(false);
-      navigateToPage('events');
+      
+      try {
+        await createEvent({
+          name: eventName,
+          date: eventDate ? eventDate.toISOString().split('T')[0] : null,
+          captain: eventCaptain,
+          coCaptain: eventBackupCaptain,
+          announced: false, // Default to not announced
+        }, currentUser.id);
+
+        // Reset form
+        setEventName('');
+        setEventDate(null);
+        setEventCaptain('');
+        setEventBackupCaptain('');
+        setEventNameError(false);
+        navigateToPage('events');
+      } catch (error) {
+        console.error('Create event error:', error);
+        alert('Etkinlik oluşturulurken bir hata oluştu');
+      }
     };
 
     const formatDate = (date) => {
@@ -1220,65 +1901,67 @@ export default function App() {
 
     return (
       <View style={{ flex: 1 }}>
-        <ScrollView 
-          style={styles.dashboardScrollView}
-          contentContainerStyle={styles.dashboardContent}
-          showsVerticalScrollIndicator={false}
-        >
-          <Text style={styles.pageTitle}>Yeni Etkinlik</Text>
+    <ScrollView 
+      style={styles.dashboardScrollView}
+      contentContainerStyle={styles.dashboardContent}
+      showsVerticalScrollIndicator={false}
+    >
+      <Text style={styles.pageTitle}>Yeni Etkinlik</Text>
 
-          <View style={styles.createFormSection}>
-            <Text style={styles.formLabel}>Etkinlik Adı</Text>
-            <TextInput
+      <View style={styles.createFormSection}>
+        <Text style={styles.formLabel}>Etkinlik Adı</Text>
+        <TextInput
               style={[
                 styles.formInput,
                 eventNameError && styles.formInputError
               ]}
               placeholder="Etkinlik adı"
-              placeholderTextColor="#999"
+          placeholderTextColor="#999"
               value={eventName}
               onChangeText={(text) => {
                 setEventName(text);
                 if (text.trim()) setEventNameError(false);
               }}
-            />
+        />
             {eventNameError && (
               <Text style={styles.formErrorText}>Etkinlik adı zorunludur</Text>
             )}
-          </View>
+      </View>
 
-          <View style={styles.createFormSection}>
-            <Text style={styles.formLabel}>Tarih</Text>
+      <View style={styles.createFormSection}>
+        <Text style={styles.formLabel}>Tarih</Text>
             <TouchableOpacity 
-              style={styles.formInput}
+          style={styles.formInput}
               onPress={() => setShowDatePicker(true)}
             >
               <Text style={eventDate ? styles.datePickerText : styles.datePickerPlaceholder}>
                 {eventDate ? formatDate(eventDate) : 'Tarih seç'}
               </Text>
             </TouchableOpacity>
-          </View>
+      </View>
 
-          <View style={styles.createFormSection}>
+      <View style={styles.createFormSection}>
             <Text style={styles.formLabel}>Kaptan</Text>
-            <TextInput
-              style={styles.formInput}
-              placeholder="Kaptan adı"
-              placeholderTextColor="#999"
-              value={eventCaptain}
-              onChangeText={setEventCaptain}
-            />
+            <TouchableOpacity 
+          style={styles.formInput}
+              onPress={() => setShowCaptainPicker(true)}
+            >
+              <Text style={eventCaptain ? styles.datePickerText : styles.datePickerPlaceholder}>
+                {eventCaptain || 'Kaptan seç'}
+              </Text>
+            </TouchableOpacity>
           </View>
 
           <View style={styles.createFormSection}>
             <Text style={styles.formLabel}>Yedek Kaptan</Text>
-            <TextInput
+            <TouchableOpacity 
               style={styles.formInput}
-              placeholder="Yedek kaptan adı"
-              placeholderTextColor="#999"
-              value={eventBackupCaptain}
-              onChangeText={setEventBackupCaptain}
-            />
+              onPress={() => setShowCoCaptainPicker(true)}
+            >
+              <Text style={eventBackupCaptain ? styles.datePickerText : styles.datePickerPlaceholder}>
+                {eventBackupCaptain || 'Yedek kaptan seç'}
+              </Text>
+            </TouchableOpacity>
           </View>
 
           <View style={styles.eventCreateNote}>
@@ -1306,7 +1989,7 @@ export default function App() {
                 <TouchableOpacity onPress={() => setShowDatePicker(false)}>
                   <Image source={require('./assets/close.png')} style={styles.datePickerCloseIcon} />
                 </TouchableOpacity>
-              </View>
+      </View>
               <ScrollView style={styles.datePickerCalendar}>
                 {/* Simple date selection - next 60 days */}
                 {Array.from({ length: 60 }, (_, i) => {
@@ -1335,6 +2018,94 @@ export default function App() {
                         isSelected && styles.datePickerOptionTextSelected
                       ]}>
                         {date.getDate()} {monthNames[date.getMonth()]} {date.getFullYear()} - {dayNames[date.getDay()]}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
+            </View>
+          </View>
+        )}
+
+        {/* Captain Picker Modal */}
+        {showCaptainPicker && (
+          <View style={styles.datePickerOverlay}>
+            <TouchableOpacity 
+              style={styles.datePickerBackdrop}
+              activeOpacity={1}
+              onPress={() => setShowCaptainPicker(false)}
+            />
+            <View style={styles.datePickerModal}>
+              <View style={styles.datePickerHeader}>
+                <Text style={styles.datePickerTitle}>Kaptan Seç</Text>
+                <TouchableOpacity onPress={() => setShowCaptainPicker(false)}>
+                  <Image source={require('./assets/close.png')} style={styles.datePickerCloseIcon} />
+                </TouchableOpacity>
+              </View>
+              <ScrollView style={styles.datePickerCalendar}>
+                {allUsers.map((user) => {
+                  const isSelected = eventCaptain === user.name;
+                  return (
+                    <TouchableOpacity
+                      key={user.id}
+                      style={[
+                        styles.datePickerOption,
+                        isSelected && styles.datePickerOptionSelected
+                      ]}
+                      onPress={() => {
+                        setEventCaptain(user.name);
+                        setShowCaptainPicker(false);
+                      }}
+                    >
+                      <Text style={[
+                        styles.datePickerOptionText,
+                        isSelected && styles.datePickerOptionTextSelected
+                      ]}>
+                        {user.name}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
+            </View>
+          </View>
+        )}
+
+        {/* Co-Captain Picker Modal */}
+        {showCoCaptainPicker && (
+          <View style={styles.datePickerOverlay}>
+            <TouchableOpacity 
+              style={styles.datePickerBackdrop}
+              activeOpacity={1}
+              onPress={() => setShowCoCaptainPicker(false)}
+            />
+            <View style={styles.datePickerModal}>
+              <View style={styles.datePickerHeader}>
+                <Text style={styles.datePickerTitle}>Yedek Kaptan Seç</Text>
+                <TouchableOpacity onPress={() => setShowCoCaptainPicker(false)}>
+                  <Image source={require('./assets/close.png')} style={styles.datePickerCloseIcon} />
+                </TouchableOpacity>
+              </View>
+              <ScrollView style={styles.datePickerCalendar}>
+                {allUsers.map((user) => {
+                  const isSelected = eventBackupCaptain === user.name;
+                  return (
+                    <TouchableOpacity
+                      key={user.id}
+                      style={[
+                        styles.datePickerOption,
+                        isSelected && styles.datePickerOptionSelected
+                      ]}
+                      onPress={() => {
+                        setEventBackupCaptain(user.name);
+                        setShowCoCaptainPicker(false);
+                      }}
+                    >
+                      <Text style={[
+                        styles.datePickerOptionText,
+                        isSelected && styles.datePickerOptionTextSelected
+                      ]}>
+                        {user.name}
                       </Text>
                     </TouchableOpacity>
                   );
@@ -1374,81 +2145,164 @@ export default function App() {
           </TouchableOpacity>
         </View>
 
-        <View style={styles.eventDetailSection}>
-          <View style={styles.eventDetailRow}>
-            <Text style={styles.eventDetailLabel}>Tarih</Text>
-            <Text style={[styles.eventDetailValue, !eventDate && styles.eventDetailValueEmpty]}>
-              {formatDate(eventDate)}
-            </Text>
-          </View>
+        {/* Top Section: Image on left, Info on right */}
+        <View style={styles.eventDetailTopSection}>
+          {/* Left: Image */}
+          {(event.hasImage || event.imageUrl) ? (
+            <View style={styles.eventDetailImageContainer}>
+              <Image 
+                source={{ uri: event.imageUrl }}
+                style={styles.eventDetailImageLarge}
+              />
+              <TouchableOpacity 
+                style={styles.downloadImageButtonSmall}
+                onPress={async () => {
+                  try {
+                    // Request permissions (writeOnly: true to only request photo write permission)
+                    const { status } = await MediaLibrary.requestPermissionsAsync(true);
+                    if (status !== 'granted') {
+                      Alert.alert('İzin Gerekli', 'Fotoğraf kaydetmek için galeri izni vermeniz gerekiyor.');
+                      return;
+                    }
 
-          <View style={styles.eventDetailRow}>
-            <Text style={styles.eventDetailLabel}>Saat</Text>
-            <Text style={[styles.eventDetailValue, !event.time && styles.eventDetailValueEmpty]}>
-              {event.time || '-'}
-            </Text>
-          </View>
+                    // Download the image
+                    const fileUri = FileSystem.documentDirectory + 'event_image.jpg';
+                    const downloadResult = await FileSystem.downloadAsync(event.imageUrl, fileUri);
+                    
+                    // Save to media library
+                    await MediaLibrary.saveToLibraryAsync(downloadResult.uri);
+                    
+                    showToastNotification('Görsel indirildi');
+                  } catch (error) {
+                    console.error('Error downloading image:', error);
+                    Alert.alert('Hata', 'Görsel indirilirken bir hata oluştu.');
+                  }
+                }}
+              >
+                <Text style={styles.downloadImageButtonTextSmall}>⬇</Text>
+              </TouchableOpacity>
+            </View>
+          ) : (
+            <View style={styles.eventDetailImageContainer}>
+              <View style={styles.eventDetailImagePlaceholder}>
+                <Text style={styles.eventImagePlaceholderTextSmall}>Görsel yok</Text>
+              </View>
+            </View>
+          )}
 
-          <View style={styles.eventDetailRow}>
-            <Text style={styles.eventDetailLabel}>Konum</Text>
-            <Text style={[styles.eventDetailValue, !event.location && styles.eventDetailValueEmpty]}>
-              {event.location || '-'}
-            </Text>
-          </View>
+          {/* Right: Information */}
+          <View style={styles.eventDetailInfoContainer}>
+            <View style={styles.eventDetailInfoRow}>
+              <Text style={styles.eventDetailInfoLabel}>Tarih</Text>
+              <Text style={[styles.eventDetailInfoValue, !eventDate && styles.eventDetailValueEmpty]}>
+                {formatDate(eventDate)}
+              </Text>
+            </View>
 
-          <View style={styles.eventDetailRow}>
-            <Text style={styles.eventDetailLabel}>Kaptan</Text>
-            <Text style={[styles.eventDetailValue, !event.captain && styles.eventDetailValueEmpty]}>
-              {event.captain || '-'}
-            </Text>
-          </View>
+            <View style={styles.eventDetailInfoRow}>
+              <Text style={styles.eventDetailInfoLabel}>Saat</Text>
+              <Text style={[styles.eventDetailInfoValue, !event.time && styles.eventDetailValueEmpty]}>
+                {event.time || '-'}
+              </Text>
+            </View>
 
-          <View style={styles.eventDetailRow}>
-            <Text style={styles.eventDetailLabel}>Yardımcı Kaptan</Text>
-            <Text style={[styles.eventDetailValue, !(event.backupCaptain || event.coCaptain) && styles.eventDetailValueEmpty]}>
-              {event.backupCaptain || event.coCaptain || '-'}
-            </Text>
+            <View style={styles.eventDetailInfoRow}>
+              <Text style={styles.eventDetailInfoLabel}>Konum</Text>
+              <Text style={[styles.eventDetailInfoValue, !event.location && styles.eventDetailValueEmpty]}>
+                {event.location || '-'}
+              </Text>
+            </View>
+
+            <View style={styles.eventDetailInfoRow}>
+              <Text style={styles.eventDetailInfoLabel}>Kaptan</Text>
+              <Text style={[styles.eventDetailInfoValue, !event.captain && styles.eventDetailValueEmpty]}>
+                {event.captain || '-'}
+              </Text>
+            </View>
+
+            <View style={styles.eventDetailInfoRow}>
+              <Text style={styles.eventDetailInfoLabel}>Yrd. Kaptan</Text>
+              <Text style={[styles.eventDetailInfoValue, !(event.backupCaptain || event.coCaptain) && styles.eventDetailValueEmpty]}>
+                {event.backupCaptain || event.coCaptain || '-'}
+              </Text>
+            </View>
           </View>
         </View>
 
+        {/* Bottom Section: Metin (full width) */}
         {(event.text || event.description) && (
           <View style={styles.eventDetailSection}>
-            <Text style={styles.eventDetailSectionTitle}>Metin</Text>
+            <View style={styles.eventDetailSectionHeader}>
+              <Text style={styles.eventDetailSectionTitle}>Metin</Text>
+              <TouchableOpacity 
+                style={styles.copyTextButton}
+                onPress={async () => {
+                  try {
+                    await Clipboard.setStringAsync(event.text || event.description || '');
+                    showToastNotification('Metin panoya kopyalandı');
+                  } catch (error) {
+                    console.error('Error copying text:', error);
+                  }
+                }}
+              >
+                <Text style={styles.copyTextButtonText}>Metni Kopyala</Text>
+              </TouchableOpacity>
+            </View>
             <Text style={styles.eventDetailDescription}>{event.text || event.description}</Text>
           </View>
         )}
 
-        {event.hasImage ? (
-          <View style={styles.eventDetailSection}>
-            <Text style={styles.eventDetailSectionTitle}>Etkinlik Görseli</Text>
-            <View style={styles.eventImagePreview}>
-              <Image 
-                source={require('./assets/placeholder_tanisma_toplantisi.jpg')} 
-                style={styles.eventImagePreviewImage}
-              />
-            </View>
-          </View>
-        ) : (
-          <View style={styles.eventDetailSection}>
-            <Text style={styles.eventDetailSectionTitle}>Etkinlik Görseli</Text>
-            <View style={styles.eventImagePlaceholder}>
-              <Text style={styles.eventImagePlaceholderText}>Görsel eklenmedi</Text>
-            </View>
-          </View>
-        )}
+        {/* Action Buttons */}
+        <View style={styles.eventDetailActionsVertical}>
+          <TouchableOpacity 
+            style={[
+              styles.announcementButton, 
+              event.announced && styles.announcementButtonDisabled
+            ]}
+            onPress={() => {
+              if (!event.announced) {
+                setAnnouncementStep(1);
+                setShowAnnouncementDialog(true);
+              }
+            }}
+            disabled={event.announced}
+          >
+            <Text style={styles.announcementButtonText}>
+              {event.announced ? 'Duyuru yapıldı ✓' : 'Duyurusu yapıldı'}
+            </Text>
+          </TouchableOpacity>
 
-        <TouchableOpacity 
-          style={styles.deleteButton} 
-          onPress={() => {
-            setConfirmDialogData({
-              type: 'deleteFromDetail',
-              message: 'Bu etkinliği silmek istediğinizden emin misiniz?'
-            });
-            setShowConfirmDialog(true);
-          }}
-        >
-          <Text style={styles.deleteButtonText}>Etkinliği Sil</Text>
-        </TouchableOpacity>
+          <TouchableOpacity 
+            style={[
+              styles.documentsButton, 
+              event.documentsSubmitted && styles.announcementButtonDisabled
+            ]}
+            onPress={() => {
+              if (!event.documentsSubmitted) {
+                setDocumentsStep(1);
+                setShowDocumentsDialog(true);
+              }
+            }}
+            disabled={event.documentsSubmitted}
+          >
+            <Text style={styles.documentsButtonText}>
+              {event.documentsSubmitted ? 'Belgeler teslim edildi ✓' : 'Belgeler teslim edildi'}
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity 
+            style={styles.deleteButton} 
+            onPress={() => {
+              setConfirmDialogData({
+                type: 'deleteFromDetail',
+                message: 'Bu etkinliği silmek istediğinizden emin misiniz?'
+              });
+              setShowConfirmDialog(true);
+            }}
+          >
+            <Text style={styles.deleteButtonText}>Etkinliği Sil</Text>
+          </TouchableOpacity>
+        </View>
       </ScrollView>
     );
   };
@@ -1456,11 +2310,6 @@ export default function App() {
   const renderEventEdit = () => {
     const event = selectedEvent || eventsData[0];
     const eventDate = event.date ? new Date(event.date) : null;
-    
-    // Initialize editEventDate if not set
-    if (editEventDate === null && eventDate) {
-      setEditEventDate(eventDate);
-    }
     
     const handleDeleteEvent = () => {
       setConfirmDialogData({
@@ -1476,6 +2325,45 @@ export default function App() {
         message: 'Değişiklikleri kaydetmek istediğinizden emin misiniz?'
       });
       setShowConfirmDialog(true);
+    };
+
+    const handlePickEventImage = async () => {
+      try {
+        // Request permissions
+        const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+        if (status !== 'granted') {
+          Alert.alert('İzin Gerekli', 'Galeriye erişim izni vermeniz gerekiyor.');
+          return;
+        }
+
+        // Launch image picker
+        const result = await ImagePicker.launchImageLibraryAsync({
+          mediaTypes: ImagePicker.MediaTypeOptions.Images,
+          allowsEditing: true,
+          aspect: [16, 9],
+          quality: 0.8,
+        });
+
+        if (!result.canceled && result.assets[0]) {
+          setUploadingImage(true);
+          try {
+            const imageUri = result.assets[0].uri;
+            await uploadEventImage(event.id, imageUri);
+            
+            // Update local state
+            setEventImageUri(imageUri);
+            
+            Alert.alert('Başarılı', 'Etkinlik görseli güncellendi!');
+          } catch (error) {
+            console.error('Error uploading image:', error);
+            Alert.alert('Hata', 'Görsel yüklenirken bir hata oluştu.');
+          } finally {
+            setUploadingImage(false);
+          }
+        }
+      } catch (error) {
+        console.error('Error picking image:', error);
+      }
     };
     
     const formatDate = (date) => {
@@ -1493,97 +2381,165 @@ export default function App() {
         >
           <Text style={styles.pageTitle}>Etkinliği Düzenle</Text>
 
-          <View style={styles.createFormSection}>
+          {/* Event Name - Full Width */}
+      <View style={styles.createFormSection}>
             <Text style={styles.formLabel}>Etkinlik Adı</Text>
-            <TextInput
-              style={styles.formInput}
+        <TextInput
+          style={styles.formInput}
               placeholder="Etkinlik adı"
-              placeholderTextColor="#999"
-              defaultValue={event.name}
-            />
+          placeholderTextColor="#999"
+              value={editEventName}
+              onChangeText={setEditEventName}
+        />
+      </View>
+
+          {/* Top Section: Image on left, Info on right */}
+          <View style={styles.eventDetailTopSection}>
+            {/* Left: Image */}
+            <View style={styles.eventDetailImageContainer}>
+              {(event.imageUrl || eventImageUri) ? (
+                <Image 
+                  source={{ uri: eventImageUri || event.imageUrl }}
+                  style={styles.eventDetailImageLarge}
+                />
+              ) : (
+                <View style={styles.eventDetailImagePlaceholder}>
+                  <Text style={styles.eventImagePlaceholderTextSmall}>Görsel yok</Text>
+                </View>
+              )}
+              <TouchableOpacity 
+                style={styles.downloadImageButtonSmall}
+                onPress={handlePickEventImage}
+                disabled={uploadingImage}
+              >
+                <Text style={styles.downloadImageButtonTextSmall}>
+                  {uploadingImage ? '⏳' : '📷'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+
+            {/* Right: Editable Information */}
+            <View style={styles.eventDetailInfoContainer}>
+              <View style={styles.eventEditCompactField}>
+                <Text style={styles.eventDetailInfoLabel}>Tarih</Text>
+                <TouchableOpacity 
+                  style={styles.compactInput}
+                  onPress={() => setShowEditDatePicker(true)}
+                >
+                  <Text style={editEventDate || eventDate ? styles.compactInputText : styles.compactInputPlaceholder}>
+                    {editEventDate ? formatDate(editEventDate) : (eventDate ? formatDate(eventDate) : 'Tarih seç')}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+
+              <View style={styles.eventEditCompactField}>
+                <Text style={styles.eventDetailInfoLabel}>Saat</Text>
+        <TextInput
+                  style={styles.compactInput}
+                  placeholder="Saat"
+          placeholderTextColor="#999"
+                  value={editEventTime}
+                  onChangeText={setEditEventTime}
+        />
+      </View>
+
+              <View style={styles.eventEditCompactField}>
+                <Text style={styles.eventDetailInfoLabel}>Konum</Text>
+        <TextInput
+                  style={styles.compactInput}
+                  placeholder="Konum"
+          placeholderTextColor="#999"
+                  value={editEventLocation}
+                  onChangeText={setEditEventLocation}
+        />
+      </View>
+
+              <View style={styles.eventEditCompactField}>
+                <Text style={styles.eventDetailInfoLabel}>Kaptan</Text>
+                <TouchableOpacity 
+                  style={styles.compactInput}
+                  onPress={() => setShowEditCaptainPicker(true)}
+                >
+                  <Text style={editEventCaptain ? styles.compactInputText : styles.compactInputPlaceholder}>
+                    {editEventCaptain || 'Kaptan'}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+
+              <View style={styles.eventEditCompactField}>
+                <Text style={styles.eventDetailInfoLabel}>Yrd. Kaptan</Text>
+                <TouchableOpacity 
+                  style={styles.compactInput}
+                  onPress={() => setShowEditCoCaptainPicker(true)}
+                >
+                  <Text style={editEventCoCaptain ? styles.compactInputText : styles.compactInputPlaceholder}>
+                    {editEventCoCaptain || 'Yrd. Kaptan'}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </View>
           </View>
 
-          <View style={styles.createFormSection}>
-            <Text style={styles.formLabel}>Tarih</Text>
+          {/* Bottom Section: Metin (full width) */}
+          <View style={styles.eventDetailSection}>
+            <Text style={styles.eventDetailSectionTitle}>Metin</Text>
+        <TextInput
+              style={[styles.formInput, styles.formTextArea]}
+              placeholder="Etkinlik metni"
+          placeholderTextColor="#999"
+              multiline
+              numberOfLines={6}
+              value={editEventText}
+              onChangeText={setEditEventText}
+        />
+      </View>
+
+          {/* Action Buttons */}
+          <View style={styles.eventDetailActionsVertical}>
             <TouchableOpacity 
-              style={styles.formInput}
-              onPress={() => setShowEditDatePicker(true)}
+              style={[
+                styles.announcementButton, 
+                event.announced && styles.announcementButtonDisabled
+              ]}
+              onPress={() => {
+                if (!event.announced) {
+                  setAnnouncementStep(1);
+                  setShowAnnouncementDialog(true);
+                }
+              }}
+              disabled={event.announced}
             >
-              <Text style={editEventDate || eventDate ? styles.datePickerText : styles.datePickerPlaceholder}>
-                {editEventDate ? formatDate(editEventDate) : (eventDate ? formatDate(eventDate) : 'Tarih seç')}
+              <Text style={styles.announcementButtonText}>
+                {event.announced ? 'Duyuru yapıldı ✓' : 'Duyurusu yapıldı'}
               </Text>
             </TouchableOpacity>
-          </View>
 
-        <View style={styles.createFormSection}>
-          <Text style={styles.formLabel}>Saat</Text>
-          <TextInput
-            style={styles.formInput}
-            placeholder="Saat"
-            placeholderTextColor="#999"
-            defaultValue={event.time || ''}
-          />
-        </View>
+            <TouchableOpacity 
+              style={[
+                styles.documentsButton, 
+                event.documentsSubmitted && styles.announcementButtonDisabled
+              ]}
+              onPress={() => {
+                if (!event.documentsSubmitted) {
+                  setDocumentsStep(1);
+                  setShowDocumentsDialog(true);
+                }
+              }}
+              disabled={event.documentsSubmitted}
+            >
+              <Text style={styles.documentsButtonText}>
+                {event.documentsSubmitted ? 'Belgeler teslim edildi ✓' : 'Belgeler teslim edildi'}
+              </Text>
+            </TouchableOpacity>
 
-        <View style={styles.createFormSection}>
-          <Text style={styles.formLabel}>Konum</Text>
-          <TextInput
-            style={styles.formInput}
-            placeholder="Konum"
-            placeholderTextColor="#999"
-            defaultValue={event.location || ''}
-          />
-        </View>
+            <TouchableOpacity style={styles.submitButton} onPress={handleSaveChanges}>
+              <Text style={styles.submitButtonText}>Değişiklikleri Kaydet</Text>
+            </TouchableOpacity>
 
-        <View style={styles.createFormSection}>
-          <Text style={styles.formLabel}>Metin</Text>
-          <TextInput
-            style={[styles.formInput, styles.formTextArea]}
-            placeholder="Etkinlik metni"
-            placeholderTextColor="#999"
-            multiline
-            numberOfLines={6}
-            defaultValue={event.text || event.description || ''}
-          />
-        </View>
-
-        <View style={styles.createFormSection}>
-          <Text style={styles.formLabel}>Kaptan</Text>
-          <TextInput
-            style={styles.formInput}
-            placeholder="Kaptan"
-            placeholderTextColor="#999"
-            defaultValue={event.captain || ''}
-          />
-        </View>
-
-        <View style={styles.createFormSection}>
-          <Text style={styles.formLabel}>Yardımcı Kaptan</Text>
-          <TextInput
-            style={styles.formInput}
-            placeholder="Yardımcı kaptan"
-            placeholderTextColor="#999"
-            defaultValue={event.backupCaptain || event.coCaptain || ''}
-          />
-        </View>
-
-        <View style={styles.createFormSection}>
-          <Text style={styles.formLabel}>Etkinlik Görseli</Text>
-          <TouchableOpacity style={styles.imageUploadButton}>
-            <Image source={require('./assets/image.png')} style={styles.imageUploadIcon} />
-            <Text style={styles.imageUploadText}>
-              {event.hasImage ? 'Görseli Değiştir' : 'Görsel Ekle'}
-            </Text>
-          </TouchableOpacity>
-        </View>
-
-          <TouchableOpacity style={styles.submitButton} onPress={handleSaveChanges}>
-            <Text style={styles.submitButtonText}>Değişiklikleri Kaydet</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity style={styles.deleteButton} onPress={handleDeleteEvent}>
-            <Text style={styles.deleteButtonText}>Etkinliği Sil</Text>
-          </TouchableOpacity>
+            <TouchableOpacity style={styles.deleteButton} onPress={handleDeleteEvent}>
+              <Text style={styles.deleteButtonText}>Etkinliği Sil</Text>
+        </TouchableOpacity>
+      </View>
         </ScrollView>
 
         {/* Date Picker Modal for Edit */}
@@ -1599,8 +2555,8 @@ export default function App() {
                 <Text style={styles.datePickerTitle}>Tarih Seç</Text>
                 <TouchableOpacity onPress={() => setShowEditDatePicker(false)}>
                   <Image source={require('./assets/close.png')} style={styles.datePickerCloseIcon} />
-                </TouchableOpacity>
-              </View>
+      </TouchableOpacity>
+      </View>
               <ScrollView style={styles.datePickerCalendar}>
                 {/* Simple date selection - next 60 days */}
                 {Array.from({ length: 60 }, (_, i) => {
@@ -1630,6 +2586,94 @@ export default function App() {
                       ]}>
                         {date.getDate()} {monthNames[date.getMonth()]} {date.getFullYear()} - {dayNames[date.getDay()]}
                       </Text>
+      </TouchableOpacity>
+                  );
+                })}
+    </ScrollView>
+            </View>
+          </View>
+        )}
+
+        {/* Captain Picker Modal for Edit */}
+        {showEditCaptainPicker && (
+          <View style={styles.datePickerOverlay}>
+            <TouchableOpacity 
+              style={styles.datePickerBackdrop}
+              activeOpacity={1}
+              onPress={() => setShowEditCaptainPicker(false)}
+            />
+            <View style={styles.datePickerModal}>
+              <View style={styles.datePickerHeader}>
+                <Text style={styles.datePickerTitle}>Kaptan Seç</Text>
+                <TouchableOpacity onPress={() => setShowEditCaptainPicker(false)}>
+                  <Image source={require('./assets/close.png')} style={styles.datePickerCloseIcon} />
+                </TouchableOpacity>
+              </View>
+              <ScrollView style={styles.datePickerCalendar}>
+                {allUsers.map((user) => {
+                  const isSelected = editEventCaptain === user.name;
+                  return (
+                    <TouchableOpacity
+                      key={user.id}
+                      style={[
+                        styles.datePickerOption,
+                        isSelected && styles.datePickerOptionSelected
+                      ]}
+                      onPress={() => {
+                        setEditEventCaptain(user.name);
+                        setShowEditCaptainPicker(false);
+                      }}
+                    >
+                      <Text style={[
+                        styles.datePickerOptionText,
+                        isSelected && styles.datePickerOptionTextSelected
+                      ]}>
+                        {user.name}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
+            </View>
+          </View>
+        )}
+
+        {/* Co-Captain Picker Modal for Edit */}
+        {showEditCoCaptainPicker && (
+          <View style={styles.datePickerOverlay}>
+            <TouchableOpacity 
+              style={styles.datePickerBackdrop}
+              activeOpacity={1}
+              onPress={() => setShowEditCoCaptainPicker(false)}
+            />
+            <View style={styles.datePickerModal}>
+              <View style={styles.datePickerHeader}>
+                <Text style={styles.datePickerTitle}>Yardımcı Kaptan Seç</Text>
+                <TouchableOpacity onPress={() => setShowEditCoCaptainPicker(false)}>
+                  <Image source={require('./assets/close.png')} style={styles.datePickerCloseIcon} />
+                </TouchableOpacity>
+              </View>
+              <ScrollView style={styles.datePickerCalendar}>
+                {allUsers.map((user) => {
+                  const isSelected = editEventCoCaptain === user.name;
+                  return (
+                    <TouchableOpacity
+                      key={user.id}
+                      style={[
+                        styles.datePickerOption,
+                        isSelected && styles.datePickerOptionSelected
+                      ]}
+                      onPress={() => {
+                        setEditEventCoCaptain(user.name);
+                        setShowEditCoCaptainPicker(false);
+                      }}
+                    >
+                      <Text style={[
+                        styles.datePickerOptionText,
+                        isSelected && styles.datePickerOptionTextSelected
+                      ]}>
+                        {user.name}
+                      </Text>
                     </TouchableOpacity>
                   );
                 })}
@@ -1641,12 +2685,17 @@ export default function App() {
     );
   };
 
-  if (!fontsLoaded) {
+  if (!fontsLoaded || checkingAuth) {
     return (
       <View style={styles.loadingContainer}>
         <StatusBar style="auto" />
       </View>
     );
+  }
+
+  // If not authenticated, show login
+  if (!isAuthenticated) {
+    return renderLogin();
   }
 
   if (showMainPage) {
@@ -1766,6 +2815,13 @@ export default function App() {
               <TouchableOpacity style={styles.iconButton} onPress={() => setNotificationsDropdownOpen(!notificationsDropdownOpen)}>
                 <View style={styles.iconFrame}>
                   <Image source={require('./assets/notifications.png')} style={styles.icon} />
+                  {notificationsData.filter(n => !n.read).length > 0 && (
+                    <View style={styles.notificationBadge}>
+                      <Text style={styles.notificationBadgeText}>
+                        {notificationsData.filter(n => !n.read).length}
+                      </Text>
+                    </View>
+                  )}
                 </View>
               </TouchableOpacity>
             </View>
@@ -1776,45 +2832,46 @@ export default function App() {
 
           {/* Notifications Dropdown */}
           {notificationsDropdownOpen && (
-            <View style={styles.notificationsDropdown}>
+            <>
               <TouchableOpacity 
-                style={styles.notificationDropdownItem}
+                style={styles.notificationsBackdrop}
+                activeOpacity={1}
+                onPress={() => setNotificationsDropdownOpen(false)}
+              />
+              <View style={styles.notificationsDropdown}>
+              {notificationsData.length === 0 ? (
+                <View style={styles.notificationDropdownEmpty}>
+                  <Text style={styles.notificationDropdownEmptyText}>Henüz bildirim yok</Text>
+                </View>
+              ) : (
+                <>
+                  {notificationsData.slice(0, 5).map((notification) => {
+                    const icon = notification.type === 'message_cc' ? '📧' :
+                                notification.type === 'message_reply' ? '💬' :
+                                notification.type === 'reply_tag' ? '🏷️' :
+                                notification.type === 'event_announcement' ? '⚠️' : '🔔';
+                    
+                    return (
+              <TouchableOpacity 
+                        key={notification.id}
+                        style={[
+                          styles.notificationDropdownItem,
+                          !notification.read && styles.notificationDropdownItemUnread
+                        ]}
                 onPress={() => {
                   setNotificationsDropdownOpen(false);
+                          handleNotificationClick(notification);
                 }}
               >
-                <Text style={styles.notificationDropdownIcon}>💬</Text>
+                        <Text style={styles.notificationDropdownIcon}>{icon}</Text>
                 <View style={styles.notificationDropdownInfo}>
-                  <Text style={styles.notificationDropdownTitle}>Bir mesajda etiketlendiniz</Text>
-                  <Text style={styles.notificationDropdownTime}>1 saat önce</Text>
+                          <Text style={styles.notificationDropdownTitle}>{notification.title}</Text>
+                          <Text style={styles.notificationDropdownTime}>{getTimeAgo(notification.createdAt)}</Text>
                 </View>
+                        {!notification.read && <View style={styles.notificationDropdownUnreadDot} />}
               </TouchableOpacity>
-
-              <TouchableOpacity 
-                style={styles.notificationDropdownItem}
-                onPress={() => {
-                  setNotificationsDropdownOpen(false);
-                }}
-              >
-                <Text style={styles.notificationDropdownIcon}>⚠️</Text>
-                <View style={styles.notificationDropdownInfo}>
-                  <Text style={styles.notificationDropdownTitle}>Etkinlik duyurusu yapılmadı</Text>
-                  <Text style={styles.notificationDropdownTime}>3 saat önce</Text>
-                </View>
-              </TouchableOpacity>
-
-              <TouchableOpacity 
-                style={styles.notificationDropdownItem}
-                onPress={() => {
-                  setNotificationsDropdownOpen(false);
-                }}
-              >
-                <Text style={styles.notificationDropdownIcon}>🔔</Text>
-                <View style={styles.notificationDropdownInfo}>
-                  <Text style={styles.notificationDropdownTitle}>Etkinlik yaklaşıyor</Text>
-                  <Text style={styles.notificationDropdownTime}>Dün</Text>
-                </View>
-              </TouchableOpacity>
+                    );
+                  })}
 
               <TouchableOpacity 
                 style={styles.viewAllNotifications}
@@ -1825,7 +2882,10 @@ export default function App() {
               >
                 <Text style={styles.viewAllNotificationsText}>Tümünü gör</Text>
               </TouchableOpacity>
+                </>
+              )}
             </View>
+            </>
           )}
 
           <StatusBar style="dark" />
@@ -1906,6 +2966,109 @@ export default function App() {
               </View>
             </View>
           </View>
+        )}
+
+        {/* Announcement Dialog */}
+        {showAnnouncementDialog && (
+          <View style={styles.confirmDialogOverlay}>
+            <View style={styles.confirmDialogBox}>
+              <Text style={styles.confirmDialogTitle}>Duyuru Durumu</Text>
+              <Text style={styles.confirmDialogMessage}>
+                {announcementStep === 1 
+                  ? 'Bu etkinliğin duyurusu yapıldı mı?'
+                  : 'Bak yapıldı mı kesin? Sonra uğraştırma milleti.'}
+              </Text>
+              <View style={styles.confirmDialogButtons}>
+                <TouchableOpacity 
+                  style={styles.confirmDialogButtonCancel}
+                  onPress={() => {
+                    setShowAnnouncementDialog(false);
+                    setAnnouncementStep(1);
+                  }}
+                >
+                  <Text style={styles.confirmDialogButtonCancelText}>Hayır</Text>
+                </TouchableOpacity>
+                <TouchableOpacity 
+                  style={styles.confirmDialogButtonConfirm}
+                  onPress={async () => {
+                    if (announcementStep === 1) {
+                      setAnnouncementStep(2);
+                    } else {
+                      // Mark as announced in Firebase
+                      try {
+                        if (selectedEvent && selectedEvent.id) {
+                          await updateEvent(selectedEvent.id, { announced: true });
+                          setShowAnnouncementDialog(false);
+                          setAnnouncementStep(1);
+                          alert('Etkinlik duyurusu yapıldı olarak işaretlendi!');
+                        }
+                      } catch (error) {
+                        console.error('Update announcement error:', error);
+                        alert('Duyuru durumu güncellenirken bir hata oluştu');
+                      }
+                    }
+                  }}
+                >
+                  <Text style={styles.confirmDialogButtonConfirmText}>Evet</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        )}
+
+        {/* Documents Dialog */}
+        {showDocumentsDialog && (
+          <View style={styles.confirmDialogOverlay}>
+            <View style={styles.confirmDialogBox}>
+              <Text style={styles.confirmDialogTitle}>Belge Durumu</Text>
+              <Text style={styles.confirmDialogMessage}>
+                {documentsStep === 1 
+                  ? 'Bu etkinliğin belgeleri teslim edildi mi?'
+                  : 'Bak teslim edildi mi kesin? Sonra uğraştırma milleti.'}
+              </Text>
+              <View style={styles.confirmDialogButtons}>
+                <TouchableOpacity 
+                  style={styles.confirmDialogButtonCancel}
+                  onPress={() => {
+                    setShowDocumentsDialog(false);
+                    setDocumentsStep(1);
+                  }}
+                >
+                  <Text style={styles.confirmDialogButtonCancelText}>Hayır</Text>
+                </TouchableOpacity>
+                <TouchableOpacity 
+                  style={styles.confirmDialogButtonConfirm}
+                  onPress={async () => {
+                    if (documentsStep === 1) {
+                      setDocumentsStep(2);
+                    } else {
+                      // Mark as documents submitted in Firebase
+                      try {
+                        if (selectedEvent && selectedEvent.id) {
+                          await updateEvent(selectedEvent.id, { documentsSubmitted: true });
+                          setShowDocumentsDialog(false);
+                          setDocumentsStep(1);
+                          showToastNotification('Belgeler teslim edildi olarak işaretlendi');
+                        }
+                      } catch (error) {
+                        console.error('Update documents error:', error);
+                        alert('Belge durumu güncellenirken bir hata oluştu');
+                      }
+                    }
+                  }}
+                >
+                  <Text style={styles.confirmDialogButtonConfirmText}>Evet</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        )}
+
+        {/* Toast Notification */}
+        {showToast && (
+          <Animated.View style={[styles.toastContainer, { opacity: toastOpacity }]}>
+            <Text style={styles.toastText}>{toastMessage}</Text>
+          </Animated.View>
         )}
       </SafeAreaView>
     );
@@ -2080,6 +3243,13 @@ const styles = StyleSheet.create({
     borderRadius: 30,
     backgroundColor: '#007AFF',
     marginRight: 15,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  profileInitial: {
+    fontFamily: 'Inter_18pt-Bold',
+    fontSize: 24,
+    color: '#fff',
   },
   welcomeText: {
     flex: 1,
@@ -2255,6 +3425,32 @@ const styles = StyleSheet.create({
     shadowRadius: 3,
     elevation: 2,
   },
+  messageCardRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+  },
+  messageCardContent: {
+    flex: 1,
+  },
+  messageAvatar: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
+  },
+  messageAvatarImage: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    marginRight: 12,
+  },
+  messageAvatarInitial: {
+    fontFamily: 'Inter_18pt-Bold',
+    fontSize: 20,
+    color: '#fff',
+  },
   messageHeader: {
     flexDirection: 'row',
     marginBottom: 12,
@@ -2265,6 +3461,12 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     alignItems: 'center',
     justifyContent: 'center',
+    marginRight: 12,
+  },
+  userAvatarImage: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     marginRight: 12,
   },
   avatarInitial: {
@@ -2625,6 +3827,14 @@ const styles = StyleSheet.create({
     tintColor: '#666',
   },
   // Notifications Dropdown Styles
+  notificationsBackdrop: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    zIndex: 4,
+  },
   notificationsDropdown: {
     position: 'absolute',
     top: 70,
@@ -2641,12 +3851,33 @@ const styles = StyleSheet.create({
     elevation: 8,
     zIndex: 5,
   },
+  notificationBadge: {
+    position: 'absolute',
+    top: -4,
+    right: -4,
+    backgroundColor: '#FF3B30',
+    borderRadius: 10,
+    minWidth: 18,
+    height: 18,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 4,
+  },
+  notificationBadgeText: {
+    fontFamily: 'Inter_18pt-Bold',
+    fontSize: 10,
+    color: '#fff',
+  },
   notificationDropdownItem: {
     flexDirection: 'row',
     alignItems: 'center',
     padding: 12,
     borderRadius: 8,
     marginBottom: 5,
+    position: 'relative',
+  },
+  notificationDropdownItemUnread: {
+    backgroundColor: '#f0f8ff',
   },
   notificationDropdownIcon: {
     fontSize: 24,
@@ -2664,6 +3895,22 @@ const styles = StyleSheet.create({
   notificationDropdownTime: {
     fontFamily: 'Inter_18pt-Regular',
     fontSize: 11,
+    color: '#999',
+  },
+  notificationDropdownUnreadDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#007AFF',
+    marginLeft: 8,
+  },
+  notificationDropdownEmpty: {
+    padding: 20,
+    alignItems: 'center',
+  },
+  notificationDropdownEmptyText: {
+    fontFamily: 'Inter_18pt-Regular',
+    fontSize: 14,
     color: '#999',
   },
   viewAllNotifications: {
@@ -2873,6 +4120,26 @@ const styles = StyleSheet.create({
     marginBottom: 6,
     borderRadius: 12,
     backgroundColor: '#f8f8f8',
+    overflow: 'hidden',
+    position: 'relative',
+  },
+  calendarEventImage: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    width: '100%',
+    height: '100%',
+    borderRadius: 12,
+  },
+  calendarEventGradient: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    borderRadius: 12,
   },
   calendarDayCellEmpty: {
     backgroundColor: 'transparent',
@@ -2882,6 +4149,7 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-start',
     width: '100%',
     flex: 1,
+    zIndex: 1,
   },
   calendarDayTextFull: {
     fontFamily: 'Inter_18pt-Medium',
@@ -3073,6 +4341,12 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     alignItems: 'center',
     justifyContent: 'center',
+    marginRight: 10,
+  },
+  userAvatarSmallImage: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
     marginRight: 10,
   },
   avatarInitialSmall: {
@@ -3580,6 +4854,616 @@ const styles = StyleSheet.create({
   confirmDialogButtonConfirmText: {
     fontFamily: 'Inter_18pt-Medium',
     fontSize: 16,
+    color: '#fff',
+  },
+  // Login Screen Styles
+  loginContainer: {
+    flex: 1,
+    backgroundColor: '#f5f5f5',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  loginBox: {
+    backgroundColor: '#fff',
+    borderRadius: 20,
+    padding: 30,
+    width: '100%',
+    maxWidth: 400,
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 10,
+    elevation: 5,
+  },
+  loginLogo: {
+    width: 160,
+    height: 160,
+    marginBottom: 20,
+    resizeMode: 'contain',
+    alignSelf: 'center',
+  },
+  loginTitle: {
+    fontFamily: 'Inter_18pt-Bold',
+    fontSize: 24,
+    color: '#000',
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  loginSubtitle: {
+    fontFamily: 'Inter_18pt-Regular',
+    fontSize: 14,
+    color: '#666',
+    marginBottom: 30,
+    textAlign: 'center',
+  },
+  loginInput: {
+    width: '100%',
+    backgroundColor: '#f8f8f8',
+    borderRadius: 10,
+    padding: 15,
+    fontFamily: 'Inter_18pt-Regular',
+    fontSize: 16,
+    color: '#000',
+    borderWidth: 2,
+    borderColor: '#e5e5e5',
+    marginBottom: 10,
+  },
+  loginInputError: {
+    borderColor: '#FF3B30',
+  },
+  loginError: {
+    fontFamily: 'Inter_18pt-Regular',
+    fontSize: 14,
+    color: '#FF3B30',
+    marginBottom: 15,
+    textAlign: 'center',
+  },
+  loginButton: {
+    width: '100%',
+    backgroundColor: '#007AFF',
+    borderRadius: 10,
+    padding: 15,
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  loginButtonDisabled: {
+    backgroundColor: '#ccc',
+  },
+  loginButtonText: {
+    fontFamily: 'Inter_18pt-Bold',
+    fontSize: 16,
+    color: '#fff',
+  },
+  loginHelp: {
+    fontFamily: 'Inter_18pt-Regular',
+    fontSize: 12,
+    color: '#999',
+    textAlign: 'center',
+    lineHeight: 18,
+  },
+  // Empty State Styles
+  emptyState: {
+    padding: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  emptyStateText: {
+    fontFamily: 'Inter_18pt-Regular',
+    fontSize: 16,
+    color: '#999',
+    textAlign: 'center',
+  },
+  messageCard: {
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#e5e5e5',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  messageHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    marginBottom: 8,
+  },
+  messageTitle: {
+    flex: 1,
+    fontFamily: 'Inter_18pt-Bold',
+    fontSize: 16,
+    color: '#000',
+    marginRight: 8,
+  },
+  messageDate: {
+    fontFamily: 'Inter_18pt-Regular',
+    fontSize: 12,
+    color: '#666',
+  },
+  messageSender: {
+    fontFamily: 'Inter_18pt-Medium',
+    fontSize: 13,
+    color: '#007AFF',
+    marginBottom: 6,
+  },
+  messagePreview: {
+    fontFamily: 'Inter_18pt-Regular',
+    fontSize: 14,
+    color: '#444',
+    lineHeight: 20,
+  },
+  messageCc: {
+    fontFamily: 'Inter_18pt-Regular',
+    fontSize: 12,
+    color: '#999',
+    marginTop: 8,
+    fontStyle: 'italic',
+  },
+  messageCcDetail: {
+    fontFamily: 'Inter_18pt-Regular',
+    fontSize: 13,
+    color: '#666',
+    marginTop: 12,
+    fontStyle: 'italic',
+  },
+  deleteMessageButton: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: '#FF3B30',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginLeft: 'auto',
+  },
+  deleteMessageButtonText: {
+    fontFamily: 'Inter_18pt-Bold',
+    fontSize: 14,
+    color: '#fff',
+  },
+  deleteReplyButton: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: '#FF3B30',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginLeft: 'auto',
+  },
+  deleteReplyButtonText: {
+    fontFamily: 'Inter_18pt-Bold',
+    fontSize: 12,
+    color: '#fff',
+  },
+  notificationCard: {
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#e5e5e5',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    elevation: 2,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    position: 'relative',
+  },
+  notificationCardUnread: {
+    backgroundColor: '#f0f8ff',
+    borderColor: '#007AFF',
+  },
+  notificationContent: {
+    flex: 1,
+  },
+  notificationHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    marginBottom: 6,
+  },
+  notificationTitle: {
+    flex: 1,
+    fontFamily: 'Inter_18pt-Bold',
+    fontSize: 15,
+    color: '#000',
+    marginRight: 8,
+  },
+  notificationMessage: {
+    fontFamily: 'Inter_18pt-Regular',
+    fontSize: 14,
+    color: '#444',
+    marginBottom: 6,
+    lineHeight: 20,
+  },
+  notificationDate: {
+    fontFamily: 'Inter_18pt-Regular',
+    fontSize: 12,
+    color: '#999',
+  },
+  notificationUnreadDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#007AFF',
+    position: 'absolute',
+    top: 16,
+    right: 16,
+  },
+  deleteNotificationButton: {
+    padding: 4,
+  },
+  deleteNotificationButtonText: {
+    fontFamily: 'Inter_18pt-Regular',
+    fontSize: 16,
+    color: '#999',
+  },
+  // Mention Suggestions Styles
+  mentionSuggestionsContainer: {
+    position: 'absolute',
+    bottom: '100%',
+    left: 0,
+    right: 0,
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#e0e0e0',
+    maxHeight: 200,
+    marginBottom: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 5,
+  },
+  mentionSuggestionsList: {
+    maxHeight: 200,
+  },
+  mentionSuggestionItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f0f0f0',
+  },
+  mentionAvatar: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
+  },
+  mentionAvatarText: {
+    fontFamily: 'Inter_18pt-Bold',
+    fontSize: 14,
+    color: '#fff',
+  },
+  mentionSuggestionText: {
+    fontFamily: 'Inter_18pt-Medium',
+    fontSize: 15,
+    color: '#000',
+  },
+  mentionSuggestionEmpty: {
+    padding: 20,
+    alignItems: 'center',
+  },
+  mentionSuggestionEmptyText: {
+    fontFamily: 'Inter_18pt-Regular',
+    fontSize: 14,
+    color: '#999',
+  },
+  // New Profile Styles
+  profilePictureSection: {
+    alignItems: 'center',
+    marginTop: 20,
+    marginBottom: 20,
+  },
+  profilePictureLarge: {
+    width: 150,
+    height: 150,
+    borderRadius: 75,
+    backgroundColor: '#e5e5e5',
+  },
+  changePictureButtonLarge: {
+    position: 'absolute',
+    right: 0,
+    bottom: 0,
+    backgroundColor: '#007AFF',
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 5,
+  },
+  changePictureIconLarge: {
+    width: 24,
+    height: 24,
+    tintColor: '#fff',
+  },
+  profileNameLarge: {
+    fontFamily: 'Inter_18pt-Bold',
+    fontSize: 28,
+    color: '#000',
+    textAlign: 'center',
+    marginBottom: 20,
+  },
+  signOutButton: {
+    backgroundColor: '#FF3B30',
+    paddingVertical: 14,
+    paddingHorizontal: 40,
+    borderRadius: 10,
+    marginBottom: 30,
+    alignSelf: 'center',
+  },
+  signOutButtonText: {
+    fontFamily: 'Inter_18pt-Bold',
+    fontSize: 16,
+    color: '#fff',
+  },
+  membersSection: {
+    width: '100%',
+    marginTop: 20,
+  },
+  membersSectionTitle: {
+    fontFamily: 'Inter_18pt-Bold',
+    fontSize: 20,
+    color: '#000',
+    marginBottom: 15,
+  },
+  memberCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#fff',
+    padding: 15,
+    borderRadius: 10,
+    marginBottom: 10,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  memberAvatar: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    backgroundColor: '#007AFF',
+    marginRight: 15,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  memberInitial: {
+    fontFamily: 'Inter_18pt-Bold',
+    fontSize: 18,
+    color: '#fff',
+  },
+  memberName: {
+    fontFamily: 'Inter_18pt-Medium',
+    fontSize: 16,
+    color: '#000',
+  },
+  // Event Detail Action Buttons
+  eventDetailActions: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 10,
+  },
+  eventDetailActionsVertical: {
+    flexDirection: 'column',
+    gap: 10,
+    marginTop: 10,
+  },
+  announcementButton: {
+    backgroundColor: '#FF9500',
+    paddingVertical: 14,
+    borderRadius: 10,
+    alignItems: 'center',
+    marginTop: 10,
+  },
+  announcementButtonDisabled: {
+    opacity: 0.4,
+    backgroundColor: '#999',
+  },
+  announcementButtonText: {
+    fontFamily: 'Inter_18pt-Bold',
+    fontSize: 16,
+    color: '#fff',
+  },
+  documentsButton: {
+    backgroundColor: '#5856D6',
+    paddingVertical: 14,
+    borderRadius: 10,
+    alignItems: 'center',
+    marginTop: 10,
+  },
+  documentsButtonText: {
+    fontFamily: 'Inter_18pt-Bold',
+    fontSize: 16,
+    color: '#fff',
+  },
+  eventDetailSectionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  copyTextButton: {
+    backgroundColor: '#007AFF',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+  },
+  copyTextButtonText: {
+    fontFamily: 'Inter_18pt-Medium',
+    fontSize: 14,
+    color: '#fff',
+  },
+  downloadImageButton: {
+    backgroundColor: '#007AFF',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+  },
+  downloadImageButtonText: {
+    fontFamily: 'Inter_18pt-Medium',
+    fontSize: 14,
+    color: '#fff',
+  },
+  eventCardsContainer: {
+    paddingRight: 16,
+  },
+  eventCardHorizontal: {
+    width: 200,
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    marginRight: 12,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: '#eee',
+  },
+  eventCardHorizontalImage: {
+    width: '100%',
+    height: 120,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  eventCardHorizontalPlaceholder: {
+    fontFamily: 'Inter_18pt-Medium',
+    fontSize: 14,
+    color: '#fff',
+  },
+  eventCardHorizontalContent: {
+    padding: 12,
+  },
+  eventCardHorizontalName: {
+    fontFamily: 'Inter_18pt-Bold',
+    fontSize: 16,
+    color: '#000',
+    marginBottom: 4,
+    minHeight: 40,
+  },
+  eventCardHorizontalDate: {
+    fontFamily: 'Inter_18pt-Regular',
+    fontSize: 13,
+    color: '#666',
+  },
+  uploadingText: {
+    fontFamily: 'Inter_18pt-Regular',
+    fontSize: 14,
+    color: '#666',
+    textAlign: 'center',
+    marginTop: 8,
+  },
+  eventDetailTopSection: {
+    flexDirection: 'row',
+    marginBottom: 20,
+    gap: 16,
+  },
+  eventDetailImageContainer: {
+    width: '48%',
+    borderRadius: 12,
+    overflow: 'hidden',
+    position: 'relative',
+  },
+  eventDetailImageLarge: {
+    width: '100%',
+    height: 320,
+    borderRadius: 12,
+  },
+  eventDetailImagePlaceholder: {
+    width: '100%',
+    height: 320,
+    backgroundColor: '#e5e5e5',
+    borderRadius: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  eventImagePlaceholderTextSmall: {
+    fontFamily: 'Inter_18pt-Medium',
+    fontSize: 14,
+    color: '#999',
+  },
+  downloadImageButtonSmall: {
+    position: 'absolute',
+    bottom: 8,
+    right: 8,
+    backgroundColor: 'rgba(0, 122, 255, 0.9)',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+  },
+  downloadImageButtonTextSmall: {
+    fontSize: 16,
+    color: '#fff',
+  },
+  eventDetailInfoContainer: {
+    flex: 1,
+    justifyContent: 'space-between',
+  },
+  eventDetailInfoRow: {
+    marginBottom: 12,
+  },
+  eventDetailInfoLabel: {
+    fontFamily: 'Inter_18pt-Medium',
+    fontSize: 12,
+    color: '#666',
+    marginBottom: 4,
+  },
+  eventDetailInfoValue: {
+    fontFamily: 'Inter_18pt-Medium',
+    fontSize: 15,
+    color: '#000',
+  },
+  eventEditCompactField: {
+    marginBottom: 12,
+  },
+  compactInput: {
+    backgroundColor: '#f5f5f5',
+    borderRadius: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderWidth: 1,
+    borderColor: '#e0e0e0',
+  },
+  compactInputText: {
+    fontFamily: 'Inter_18pt-Medium',
+    fontSize: 14,
+    color: '#000',
+  },
+  compactInputPlaceholder: {
+    fontFamily: 'Inter_18pt-Regular',
+    fontSize: 14,
+    color: '#999',
+  },
+  // Toast Notification Styles
+  toastContainer: {
+    position: 'absolute',
+    bottom: 100,
+    left: 20,
+    right: 20,
+    backgroundColor: 'rgba(0, 0, 0, 0.85)',
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    borderRadius: 25,
+    alignItems: 'center',
+    zIndex: 9999,
+  },
+  toastText: {
+    fontFamily: 'Inter_18pt-Medium',
+    fontSize: 14,
     color: '#fff',
   },
 });

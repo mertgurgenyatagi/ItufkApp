@@ -11,12 +11,13 @@ import { getStorage } from 'firebase/storage';
 // 4. Scroll down to "Your apps" and click the web icon (</>)
 // 5. Copy the firebaseConfig object here
 const firebaseConfig = {
-  apiKey: "YOUR_API_KEY",
-  authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
-  projectId: "YOUR_PROJECT_ID",
-  storageBucket: "YOUR_PROJECT_ID.appspot.com",
-  messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
-  appId: "YOUR_APP_ID"
+  apiKey: "AIzaSyD86c1ituSkkOGzJtEmdroy1IijSre1FMI",
+  authDomain: "itufk-app.firebaseapp.com",
+  projectId: "itufk-app",
+  storageBucket: "itufk-app.firebasestorage.app",
+  messagingSenderId: "1061601948439",
+  appId: "1:1061601948439:web:ac16b2d556b8444338bd52",
+  measurementId: "G-7PVZ2KEGTY"
 };
 
 // Initialize Firebase
