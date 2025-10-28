@@ -1,10 +1,10 @@
 {
   "expo": {
-    "name": "mobile",
+    "name": "itufk",
     "slug": "mobile",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
+    "icon": "./assets/appicon.png",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
     "splash": {
@@ -16,11 +16,21 @@
       "supportsTablet": true
     },
     "android": {
+      "icon": "./assets/appicon.png",
       "adaptiveIcon": {
-        "foregroundImage": "./assets/adaptive-icon.png",
+        "foregroundImage": "./assets/appicon.png",
         "backgroundColor": "#ffffff"
       },
-      "edgeToEdgeEnabled": true
+      "edgeToEdgeEnabled": true,
+      "permissions": [
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.READ_MEDIA_VISUAL_USER_SELECTED",
+        "android.permission.READ_MEDIA_IMAGES",
+        "android.permission.READ_MEDIA_VIDEO",
+        "android.permission.READ_MEDIA_AUDIO"
+      ],
+      "package": "com.gurgenbaba55.mobile"
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -33,30 +43,22 @@
           "savePhotosPermission": "Allow $(PRODUCT_NAME) to save photos.",
           "isAccessMediaLocationEnabled": false
         }
-    ],
-    [
-      "expo-notifications",
-      {
-        "icon": "./assets/notifications.png",
-        "color": "#FF6B00",
-        "androidMode": "default",
-        "androidCollapsedTitle": "+{unread_notifications} yeni bildirim"
-      }
-    ],
-    [
-      "expo-notifications",
-      {
-        "icon": "./assets/notifications.png",
-        "color": "#FF6B00",
-        "androidMode": "default",
-        "androidCollapsedTitle": "+{unread_notifications} yeni bildirim"
-      }
-    ]
+      ],
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/notifications.png",
+          "color": "#FF6B00",
+          "androidMode": "default",
+          "androidCollapsedTitle": "+{unread_notifications} yeni bildirim"
+        }
+      ]
     ],
     "extra": {
       "eas": {
-        "projectId": "REPLACE_WITH_YOUR_EAS_PROJECT_ID"
+        "projectId": "c7a53e40-fbe3-458b-a4cb-57508370addd"
       }
-    }
+    },
+    "owner": "gurgenbaba55"
   }
 }
