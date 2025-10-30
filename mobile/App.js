@@ -12,8 +12,9 @@ import { getAllUsers } from './firebase/adminService';
 import { createEvent, getAllEvents, updateEvent, deleteEvent, subscribeToEvents } from './firebase/eventsService';
 import { uploadProfileImage, uploadEventImage } from './firebase/storageService';
 import { subscribeToMessages, createMessage, deleteMessage, subscribeToReplies, createReply, deleteReply } from './firebase/messagesService';
-import { subscribeToNotifications, createNotification, deleteNotification, markNotificationAsRead, notifyMessageCCUsers, notifyMessageOwnerOfReply, notifyTaggedUsers, notifyEventAnnouncementReminder } from './firebase/notificationsService';
+import { subscribeToNotifications, createNotification, deleteNotification, markNotificationAsRead, notifyMessageCCUsers, notifyMessageOwnerOfReply, notifyTaggedUsers, notifyEventAnnouncementReminder, notifyWhatsAppAnnouncementReminder, notifyInstagramAnnouncementReminder } from './firebase/notificationsService';
 import { registerForPushNotifications, savePushToken, removePushToken, showLocalNotification } from './firebase/pushNotificationsService';
+import * as Notifications from 'expo-notifications';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const STATUS_BAR_HEIGHT = Platform.OS === 'android' ? RNStatusBar.currentHeight : 0;
@@ -29,7 +30,7 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState(null);
   const [allUsers, setAllUsers] = useState([]);
   const [menuOpen, setMenuOpen] = useState(false);
-  const [currentPage, setCurrentPage] = useState('dashboard'); // dashboard, notifications, events, messages, settings, calendar, profile, messageDetail, messageCreate, eventCreate, eventDetail, eventEdit
+  const [currentPage, setCurrentPage] = useState('dashboard'); // dashboard, notifications, events, tools, messages, settings, calendar, profile, messageDetail, messageCreate, eventCreate, eventDetail, eventEdit
   const [showCaptainOnly, setShowCaptainOnly] = useState(false);
   const [showPastEvents, setShowPastEvents] = useState(false);
   const [showTaggedOnly, setShowTaggedOnly] = useState(false);
@@ -74,6 +75,7 @@ export default function App() {
   const [editEventText, setEditEventText] = useState('');
   const [editEventCaptain, setEditEventCaptain] = useState('');
   const [editEventCoCaptain, setEditEventCoCaptain] = useState('');
+  const [editDriveLink, setEditDriveLink] = useState('');
   const [profileImageUri, setProfileImageUri] = useState(null);
   const [eventImageUri, setEventImageUri] = useState(null);
   const [uploadingImage, setUploadingImage] = useState(false);
@@ -88,14 +90,41 @@ export default function App() {
   const [mentionFilter, setMentionFilter] = useState('');
   const [mentionCursorPosition, setMentionCursorPosition] = useState(0);
   const [notificationsData, setNotificationsData] = useState([]);
-  const [navigationHistory, setNavigationHistory] = useState(['dashboard']);
+  const [navigationHistory, setNavigationHistory] = useState([{ page: 'dashboard', context: null }]);
   const [toastMessage, setToastMessage] = useState('');
   const [showToast, setShowToast] = useState(false);
+  const [teamsData, setTeamsData] = useState([]);
+  const [selectedTeam, setSelectedTeam] = useState(null);
+  const [teamName, setTeamName] = useState('');
+  const [teamDescription, setTeamDescription] = useState('');
+  const [selectedTeamMembers, setSelectedTeamMembers] = useState([]);
+  const [showTeamMemberPicker, setShowTeamMemberPicker] = useState(false);
+  const [showCompletedReels, setShowCompletedReels] = useState(false);
+  // Teneke Film Dağıtımı state (self-contained)
+  const [tenekeDistributions, setTenekeDistributions] = useState([]);
+  const [selectedDistribution, setSelectedDistribution] = useState(null);
+  const [showCreateDistributionModal, setShowCreateDistributionModal] = useState(false);
+  const [newDistributionName, setNewDistributionName] = useState('');
+  const [showAddIntakeModal, setShowAddIntakeModal] = useState(false);
+  const [intakeAmountInput, setIntakeAmountInput] = useState('');
+  const [showAddReceiverModal, setShowAddReceiverModal] = useState(false);
+  const [receiverNameInput, setReceiverNameInput] = useState('');
+  const [receiverAmountInput, setReceiverAmountInput] = useState('');
+  // Project Teams (self-contained)
+  const [projectTeams, setProjectTeams] = useState([]);
+  const [showCreateProjectTeamModal, setShowCreateProjectTeamModal] = useState(false);
+  const [newProjectTeamName, setNewProjectTeamName] = useState('');
+  const [newProjectTeamDesc, setNewProjectTeamDesc] = useState('');
+  const [selectedProjectTeam, setSelectedProjectTeam] = useState(null);
+  const [showAddMembersToProjectModal, setShowAddMembersToProjectModal] = useState(false);
+  const [projectMemberSelection, setProjectMemberSelection] = useState([]);
+  
   const toastOpacity = useRef(new Animated.Value(0)).current;
   const breathingAnim = useRef(new Animated.Value(0.75)).current;
   const fadeAnim = useRef(new Animated.Value(1)).current;
   const logoFadeAnim = useRef(new Animated.Value(0)).current;
   const menuSlideAnim = useRef(new Animated.Value(-SCREEN_WIDTH * 0.75)).current;
+  const eventEditSaveTimersRef = useRef({});
 
   useEffect(() => {
     // Load custom fonts
@@ -235,12 +264,25 @@ export default function App() {
 
           // Only notify if current user is captain or co-captain
           if (captainUser?.id === currentUser.id || coCaptainUser?.id === currentUser.id) {
-            await notifyEventAnnouncementReminder(
-              captainUser?.id,
-              coCaptainUser?.id,
-              { name: event.name, eventId: event.id },
-              daysRemaining
-            );
+            // WhatsApp announcement reminder
+            if (!event.whatsappAnnounced) {
+              await notifyWhatsAppAnnouncementReminder(
+                captainUser?.id,
+                coCaptainUser?.id,
+                { name: event.name, eventId: event.id },
+                daysRemaining
+              );
+            }
+            
+            // Instagram announcement reminder
+            if (!event.instagramAnnounced) {
+              await notifyInstagramAnnouncementReminder(
+                captainUser?.id,
+                coCaptainUser?.id,
+                { name: event.name, eventId: event.id },
+                daysRemaining
+              );
+            }
           }
         }
       }
@@ -401,39 +443,151 @@ export default function App() {
     toggleMenu();
   };
 
-  const navigateToPage = (page) => {
+  // Modern navigation system like Instagram/Facebook
+  const navigateToPage = (page, context = null, replace = false) => {
     setCurrentPage(page);
     setMenuOpen(false);
     setSearchOpen(false);
     setNotificationsDropdownOpen(false);
     
-    // Add to navigation history
-    setNavigationHistory(prev => [...prev, page]);
+    if (replace) {
+      // Replace current page (for actions like "save and go back")
+      setNavigationHistory(prev => {
+        const newHistory = [...prev];
+        newHistory[newHistory.length - 1] = { page, context };
+        return newHistory;
+      });
+    } else {
+      // Add to navigation history
+      setNavigationHistory(prev => [...prev, { page, context }]);
+    }
+  };
+
+  // Navigate back with proper context handling
+  const navigateBack = () => {
+    if (navigationHistory.length > 1) {
+      const newHistory = [...navigationHistory];
+      newHistory.pop(); // Remove current page
+      const previousPage = newHistory[newHistory.length - 1];
+      
+      setNavigationHistory(newHistory);
+      setCurrentPage(previousPage.page);
+      
+      // Handle context restoration
+      if (previousPage.context) {
+        if (previousPage.context.selectedMessage) {
+          setSelectedMessage(previousPage.context.selectedMessage);
+        }
+        if (previousPage.context.selectedEvent) {
+          setSelectedEvent(previousPage.context.selectedEvent);
+        }
+      }
+      
+      return true;
+    }
+    return false;
+  };
+
+  // Preferred back destinations for specific pages
+  const getPreferredBackTarget = () => {
+    if (currentPage === 'eventDetail') return 'events';
+    if (currentPage === 'messageDetail') return 'messages';
+    if (currentPage === 'teneke') return 'tools';
+    if (currentPage === 'reels') return 'tools';
+    if (currentPage === 'projectTeams') return 'tools';
+    return null;
+  };
+
+  // Navigate to root page (dashboard) and clear history
+  const navigateToRoot = () => {
+    setCurrentPage('dashboard');
+    setNavigationHistory([{ page: 'dashboard', context: null }]);
+    setSelectedMessage(null);
+    setSelectedEvent(null);
   };
 
   const handleConfirmDialogAction = async () => {
     setShowConfirmDialog(false);
     
     switch (confirmDialogData.type) {
-      case 'saveChanges':
+      case 'reelsClaimStep1':
+        setConfirmDialogData({ type: 'reelsClaimStep2', message: 'Bak kesin üstleniyor musun? Sonra uğraştırma milleti.' });
+        setShowConfirmDialog(true);
+        break;
+      case 'reelsClaimStep2':
         try {
-          if (selectedEvent && selectedEvent.id) {
-            await updateEvent(selectedEvent.id, {
-              name: editEventName,
-              date: editEventDate ? editEventDate.toISOString().split('T')[0] : null,
-              time: editEventTime,
-              location: editEventLocation,
-              text: editEventText,
-              captain: editEventCaptain,
-              coCaptain: editEventCoCaptain,
-            });
-            navigateToPage('eventDetail');
-          }
+          if (!currentUser?.id || !pendingReelsEvent?.id) return;
+          await updateEvent(pendingReelsEvent.id, {
+            reelsAssigneeId: currentUser.id,
+            reelsAssigneeName: currentUser.name || currentUser.displayName || 'Bilinmeyen',
+            reelsClaimedAt: new Date().toISOString(),
+          });
+          setEventsData(prev => prev.map(e => e.id === pendingReelsEvent.id ? { ...e, reelsAssigneeId: currentUser.id, reelsAssigneeName: currentUser.name || currentUser.displayName || 'Bilinmeyen', reelsClaimedAt: new Date().toISOString() } : e));
         } catch (error) {
-          console.error('Update event error:', error);
-          alert('Etkinlik güncellenirken bir hata oluştu');
+          alert('Sorumluluk üstlenilirken bir hata oluştu');
         }
         break;
+      case 'reelsUnclaimStep1':
+        setConfirmDialogData({ type: 'reelsUnclaimStep2', message: 'Bak kesin bırakıyor musun? Sonra uğraştırma milleti.' });
+        setShowConfirmDialog(true);
+        break;
+      case 'reelsUnclaimStep2':
+        try {
+          if (!currentUser?.id || !pendingReelsEvent?.id) return;
+          await updateEvent(pendingReelsEvent.id, {
+            reelsAssigneeId: null,
+            reelsAssigneeName: null,
+            reelsClaimedAt: null,
+          });
+          setEventsData(prev => prev.map(e => e.id === pendingReelsEvent.id ? { ...e, reelsAssigneeId: null, reelsAssigneeName: null, reelsClaimedAt: null } : e));
+        } catch (error) {
+          alert('Sorumluluk bırakılırken bir hata oluştu');
+        }
+        break;
+      case 'tenekeAddIntake':
+        if (selectedDistribution?.id) {
+          const amt = Number(confirmDialogData.amount) || 0;
+          const item = { id: `in_${Date.now()}`, amount: amt, createdAt: new Date().toISOString() };
+          setTenekeDistributions(prev => prev.map(d => d.id === selectedDistribution.id ? { ...d, intakes: [item, ...d.intakes] } : d));
+          setSelectedDistribution(prev => prev && prev.id === selectedDistribution.id ? { ...prev, intakes: [item, ...prev.intakes] } : prev);
+        }
+        break;
+      case 'tenekeAddReceiver':
+        if (selectedDistribution?.id) {
+          const name = confirmDialogData.name;
+          const amt = Number(confirmDialogData.amount) || 0;
+          const rc = { id: `rc_${Date.now()}`, name, originalAmount: amt, currentAmount: amt, paid: false, createdAt: new Date().toISOString() };
+          setTenekeDistributions(prev => prev.map(d => d.id === selectedDistribution.id ? { ...d, receivers: [rc, ...d.receivers] } : d));
+          setSelectedDistribution(prev => prev && prev.id === selectedDistribution.id ? { ...prev, receivers: [rc, ...prev.receivers] } : prev);
+        }
+        break;
+      case 'tenekeMarkDone':
+        if (selectedDistribution?.id) {
+          setTenekeDistributions(prev => prev.map(d => d.id === selectedDistribution.id ? { ...d, done: true } : d));
+          setSelectedDistribution(prev => prev && prev.id === selectedDistribution.id ? { ...prev, done: true } : prev);
+        }
+        break;
+      case 'tenekeDeleteDistribution':
+        if (confirmDialogData.distId) {
+          const id = confirmDialogData.distId;
+          setTenekeDistributions(prev => prev.filter(d => d.id !== id));
+          if (selectedDistribution?.id === id) {
+            setSelectedDistribution(null);
+            navigateToPage('teneke');
+          }
+        }
+        break;
+      case 'projTeamDelete':
+        if (confirmDialogData.teamId) {
+          const id = confirmDialogData.teamId;
+          setProjectTeams(prev => prev.filter(t => t.id !== id));
+          if (selectedProjectTeam?.id === id) {
+            setSelectedProjectTeam(null);
+            navigateToPage('projectTeams');
+          }
+        }
+        break;
+      
       case 'deleteFromEdit':
       case 'deleteFromDetail':
         try {
@@ -475,25 +629,38 @@ export default function App() {
       return true;
     }
     
-    // Navigate back through history
-    if (navigationHistory.length > 1) {
-      const newHistory = [...navigationHistory];
-      newHistory.pop(); // Remove current page
-      const previousPage = newHistory[newHistory.length - 1];
-      
-      setNavigationHistory(newHistory);
-      setCurrentPage(previousPage);
-      return true;
+    // Handle different page types with proper navigation patterns
+    switch (currentPage) {
+      case 'messageDetail':
+      case 'eventDetail':
+      case 'eventEdit':
+      case 'messageCreate':
+      case 'eventCreate':
+        // These are detail/edit pages - go back to previous page
+        return navigateBack();
+        
+      case 'notifications':
+      case 'events':
+      case 'messages':
+      case 'settings':
+      case 'calendar':
+      case 'profile':
+        // These are main sections - go to dashboard
+        navigateToRoot();
+        return true;
+        
+      case 'dashboard':
+        // Already at root - allow app to exit
+        return false;
+        
+      default:
+        // Fallback - try to go back, otherwise go to dashboard
+        if (!navigateBack()) {
+          navigateToRoot();
+          return true;
+        }
+        return true;
     }
-    
-    // If no history, go to dashboard
-    if (currentPage !== 'dashboard') {
-      setNavigationHistory(['dashboard']);
-      setCurrentPage('dashboard');
-      return true;
-    }
-    
-    return false; // Allow default behavior (exit app)
   };
 
   // Handle Android back button
@@ -503,6 +670,44 @@ export default function App() {
     return () => backHandler.remove();
   }, [currentPage, navigationHistory, menuOpen, notificationsDropdownOpen, searchOpen]);
 
+  // Set up push notification listeners
+  useEffect(() => {
+    if (!isAuthenticated) return;
+
+    // Listener for notifications received while app is foregrounded
+    const notificationListener = Notifications.addNotificationReceivedListener(notification => {
+      console.log('Notification received:', notification);
+      // Show local notification when app is in foreground
+      showLocalNotification(
+        notification.request.content.title,
+        notification.request.content.body,
+        notification.request.content.data
+      );
+    });
+
+    // Listener for user tapping on notifications
+    const responseListener = Notifications.addNotificationResponseReceivedListener(response => {
+      console.log('Notification tapped:', response);
+      const data = response.notification.request.content.data;
+      
+      // Handle navigation based on notification type
+      if (data?.type === 'message') {
+        setCurrentPage('messageDetail');
+        setSelectedMessage({ id: data.messageId });
+      } else if (data?.type === 'event') {
+        setCurrentPage('eventDetail');
+        setSelectedEvent({ id: data.eventId });
+      } else if (data?.type === 'notification') {
+        setCurrentPage('notifications');
+      }
+    });
+
+    return () => {
+      notificationListener?.remove();
+      responseListener?.remove();
+    };
+  }, [isAuthenticated]);
+
   const renderPageContent = () => {
     switch (currentPage) {
       case 'dashboard':
@@ -511,6 +716,8 @@ export default function App() {
         return renderNotifications();
       case 'events':
         return renderEvents();
+      case 'tools':
+        return renderTools();
       case 'messages':
         return renderMessages();
       case 'settings':
@@ -529,6 +736,22 @@ export default function App() {
         return renderEventDetail();
       case 'eventEdit':
         return renderEventEdit();
+      case 'reels':
+        return renderReelsUstlenme();
+      case 'teneke':
+        return renderTenekeFilmDagitimi();
+      case 'projectTeams':
+        return renderProjectTeams();
+      case 'projectTeamDetail':
+        return renderProjectTeamDetail();
+      case 'tenekeDistribution':
+        return renderTenekeDistribution();
+      case 'teamCreate':
+        return renderTeamCreate();
+      case 'teamManagement':
+        return renderTeamManagement();
+      case 'teamChat':
+        return renderTeamChat();
       default:
         return renderDashboard();
     }
@@ -690,7 +913,7 @@ export default function App() {
                     ]}
                     onPress={() => {
                       setSelectedEvent(event);
-                      navigateToPage('eventDetail');
+                      navigateToPage('eventDetail', { selectedEvent: event });
                     }}
                   >
                     {(event.hasImage || event.imageUrl) && (
@@ -758,7 +981,7 @@ export default function App() {
           style={styles.messageCard}
           onPress={() => {
                   setSelectedMessage(message);
-            navigateToPage('messageDetail');
+            navigateToPage('messageDetail', { selectedMessage: message });
           }}
         >
           <View style={styles.messageHeader}>
@@ -790,13 +1013,13 @@ export default function App() {
       const message = messagesData.find(m => m.id === notification.relatedId);
       if (message) {
         setSelectedMessage(message);
-        navigateToPage('messageDetail');
+        navigateToPage('messageDetail', { selectedMessage: message });
       }
     } else if (notification.relatedType === 'event' && notification.relatedId) {
       const event = eventsData.find(e => e.id === notification.relatedId);
       if (event) {
         setSelectedEvent(event);
-        navigateToPage('eventDetail');
+        navigateToPage('eventDetail', { selectedEvent: event });
       }
     }
   };
@@ -834,11 +1057,11 @@ export default function App() {
             <View style={styles.notificationContent}>
               <View style={styles.notificationHeader}>
                 <Text style={styles.notificationTitle}>{notification.title}</Text>
-                <TouchableOpacity
+                <TouchableOpacity 
                   onPress={() => handleDeleteNotification(notification.id)}
                   style={styles.deleteNotificationButton}
                 >
-                  <Text style={styles.deleteNotificationButtonText}>✕</Text>
+                  <Image source={require('./assets/delete.png')} style={styles.deleteNotificationIcon} />
       </TouchableOpacity>
         </View>
               <Text style={styles.notificationMessage}>{notification.message}</Text>
@@ -860,14 +1083,14 @@ export default function App() {
       >
         <View style={styles.pageHeaderRow}>
           <Text style={styles.pageTitle}>Etkinlikler</Text>
-          <TouchableOpacity 
-            style={styles.createButton}
-            onPress={() => navigateToPage('eventCreate')}
-          >
-            <Image source={require('./assets/add.png')} style={styles.createButtonIcon} />
-            <Text style={styles.createButtonText}>Etkinlik oluştur</Text>
-          </TouchableOpacity>
         </View>
+        <TouchableOpacity 
+          style={[styles.createButton, styles.createButtonUnderTitle]}
+          onPress={() => navigateToPage('eventCreate')}
+        >
+          <Image source={require('./assets/add.png')} style={styles.createButtonIcon} />
+          <Text style={styles.createButtonText}>Etkinlik oluştur</Text>
+        </TouchableOpacity>
         
         {/* Filter Buttons */}
         <View style={styles.filterRow}>
@@ -926,11 +1149,11 @@ export default function App() {
               style={[
                 styles.eventCardLarge, 
                 { backgroundColor: (event.hasImage || event.imageUrl) ? '#1a1a1a' : '#999' },
-                isPastEvent && { opacity: 0.25 }
+                // past-event dimming handled inside content to keep tags full opacity
               ]}
               onPress={() => {
                 setSelectedEvent(event);
-                navigateToPage('eventDetail');
+                navigateToPage('eventDetail', { selectedEvent: event });
               }}
             >
               {(event.hasImage || event.imageUrl) && (
@@ -957,10 +1180,9 @@ export default function App() {
           />
                 </>
               )}
-              {isPastEvent && (
-                <View style={styles.pastEventWhiteOverlay} />
-              )}
+
           <View style={styles.eventContentLarge}>
+                <View>
                 <Text style={styles.eventNameLarge}>{event.name}</Text>
                 {eventDate && event.time ? (
                   <Text style={styles.eventDateTime}>
@@ -974,47 +1196,77 @@ export default function App() {
                   <Text style={styles.eventDateTime}>Tarih belirlenmedi</Text>
                 )}
                 
-                {/* Check if user is captain or co-captain */}
-                {(event.captain === currentUser?.name || event.coCaptain === currentUser?.name) && (
-            <View style={styles.captainBadge}>
-                    <Text style={styles.captainText}>
-                      {event.captain === currentUser?.name ? 'Kaptansın! ⚡' : 'Yedek kaptansın 🔄'}
-                    </Text>
-            </View>
-                )}
-                
-                {/* Show announcement status only if event is within 7 days */}
+                {/* Captain tags moved into tags grid below */}
+                </View>
+                {/* New Status Tags */}
                 {(() => {
+                  const today = new Date();
+                  today.setHours(0, 0, 0, 0);
+                  const eventDate = event.date ? new Date(event.date) : null;
                   if (!eventDate) return null;
+                  
                   const daysUntilEvent = Math.ceil((eventDate - today) / (1000 * 60 * 60 * 24));
-                  if (daysUntilEvent >= 0 && daysUntilEvent < 7) {
-                    if (event.announced) {
-                      return (
-            <View style={styles.announcementBadgeInline}>
-              <Text style={styles.announcementBadgeInlineText}>✓ Duyuru yapıldı</Text>
-            </View>
-                      );
-                    } else {
-                      return (
-                        <View style={styles.announcementBadgeWarningInline}>
-                          <Text style={styles.announcementBadgeWarningInlineText}>⚠ Duyuru yapılmadı</Text>
-          </View>
-                      );
-                    }
+                  const daysAfterEvent = Math.ceil((today - eventDate) / (1000 * 60 * 60 * 24));
+                  
+                  const tags = [];
+                  // Captain/co-captain tags (for current user)
+                  if (event.captain === currentUser?.name) {
+                    tags.push(
+                      <View key="captain" style={[styles.tagTile, styles.announcementBadgeInline]}>
+                        <Text style={styles.announcementBadgeInlineText}>Kaptansın! ⚡</Text>
+                      </View>
+                    );
+                  } else if (event.coCaptain === currentUser?.name) {
+                    tags.push(
+                      <View key="coCaptain" style={[styles.tagTile, styles.announcementBadgeInline]}>
+                        <Text style={styles.announcementBadgeInlineText}>Yedek kaptansın 🔄</Text>
+                      </View>
+                    );
                   }
-                  return null;
+                  
+                  // WhatsApp announcement tag (7 days or fewer until event)
+                  if (daysUntilEvent >= 0 && daysUntilEvent <= 7 && !event.whatsappAnnounced) {
+                    tags.push(
+                      <View key="whatsapp" style={[styles.tagTile, styles.announcementBadgeWarningInline]}>
+                        <Text style={styles.announcementBadgeWarningInlineText}>⚠ WhatsApp</Text>
+                      </View>
+                    );
+                  }
+                  
+                  // Instagram announcement tag (7 days or fewer until event)
+                  if (daysUntilEvent >= 0 && daysUntilEvent <= 7 && !event.instagramAnnounced) {
+                    tags.push(
+                      <View key="instagram" style={[styles.tagTile, styles.announcementBadgeWarningInline]}>
+                        <Text style={styles.announcementBadgeWarningInlineText}>⚠ Instagram</Text>
+                      </View>
+                    );
+                  }
+                  
+                  // Reels post tag (1 day after event until posted)
+                  if (daysAfterEvent >= 1 && !event.reelsPosted) {
+                    tags.push(
+                      <View key="reels" style={[styles.tagTile, styles.announcementBadgeWarningInline]}>
+                        <Text style={styles.announcementBadgeWarningInlineText}>⚠ Reels</Text>
+                      </View>
+                    );
+                  }
+                  
+                  // Documents tag (perpetuity until 1 day after event or provided)
+                  if ((daysUntilEvent >= 0 || daysAfterEvent <= 1) && !event.documentsSubmitted) {
+                    tags.push(
+                      <View key="documents" style={[styles.tagTile, styles.announcementBadgeWarningInline]}>
+                        <Text style={styles.announcementBadgeWarningInlineText}>⚠ Belgeler</Text>
+                      </View>
+                    );
+                  }
+                  
+                  if (tags.length === 0) return null;
+                  return (
+                    <View style={styles.tagsGrid}>
+                      {tags}
+                    </View>
+                  );
                 })()}
-                
-                {/* Documents status tag - always visible */}
-                {event.documentsSubmitted ? (
-            <View style={styles.announcementBadgeInline}>
-                    <Text style={styles.announcementBadgeInlineText}>✓ Belgeler teslim edildi</Text>
-            </View>
-                ) : (
-                  <View style={styles.announcementBadgeWarningInline}>
-                    <Text style={styles.announcementBadgeWarningInlineText}>⚠ Belgeler teslim edilmedi</Text>
-          </View>
-                )}
           </View>
         </TouchableOpacity>
           );
@@ -1032,14 +1284,14 @@ export default function App() {
       >
         <View style={styles.pageHeaderRow}>
           <Text style={styles.pageTitle}>Mesaj Panosu</Text>
-          <TouchableOpacity 
-            style={styles.createButton}
-            onPress={() => navigateToPage('messageCreate')}
-          >
-            <Image source={require('./assets/add.png')} style={styles.createButtonIcon} />
-            <Text style={styles.createButtonText}>Mesaj oluştur</Text>
-          </TouchableOpacity>
         </View>
+        <TouchableOpacity 
+          style={[styles.createButton, styles.createButtonUnderTitle]}
+          onPress={() => navigateToPage('messageCreate')}
+        >
+          <Image source={require('./assets/add.png')} style={styles.createButtonIcon} />
+          <Text style={styles.createButtonText}>Mesaj oluştur</Text>
+        </TouchableOpacity>
         
         {messagesData.length === 0 ? (
           <View style={styles.emptyState}>
@@ -1053,12 +1305,12 @@ export default function App() {
             const senderUser = allUsers.find(u => u.name === message.sender);
             
             return (
-        <TouchableOpacity 
+          <TouchableOpacity 
                 key={message.id}
           style={styles.messageCard}
           onPress={() => {
                   setSelectedMessage(message);
-            navigateToPage('messageDetail');
+            navigateToPage('messageDetail', { selectedMessage: message });
           }}
         >
                 <View style={styles.messageCardRow}>
@@ -1074,8 +1326,8 @@ export default function App() {
                       <Text style={styles.messageTitle}>{message.title}</Text>
                       <Text style={styles.messageDate}>
                         {getTimeAgo(message.createdAt)}
-          </Text>
-          </View>
+            </Text>
+            </View>
                     <Text style={styles.messageSender}>Gönderen: {message.sender}</Text>
                     <Text style={styles.messagePreview} numberOfLines={2}>
                       {message.content}
@@ -1085,9 +1337,9 @@ export default function App() {
                         CC: {message.ccUsers.join(', ')}
           </Text>
                     )}
-          </View>
-          </View>
-        </TouchableOpacity>
+              </View>
+            </View>
+          </TouchableOpacity>
             );
           })
         )}
@@ -1109,16 +1361,1105 @@ export default function App() {
             <View style={styles.settingInfo}>
               <Text style={styles.settingTitle}>Gereksiz Buton</Text>
               <Text style={styles.settingDescription}>Hiçbir şey yapmayan bir buton</Text>
-            </View>
-            <TouchableOpacity 
+          </View>
+          <TouchableOpacity 
               style={[styles.toggle, darkMode && styles.toggleActive]}
               onPress={() => setDarkMode(!darkMode)}
-            >
+          >
               <View style={[styles.toggleThumb, darkMode && styles.toggleThumbActive]} />
-            </TouchableOpacity>
-          </View>
+          </TouchableOpacity>
+        </View>
         </View>
       </ScrollView>
+    );
+  };
+
+  const renderTools = () => {
+    return (
+      <ScrollView 
+        style={styles.dashboardScrollView}
+        contentContainerStyle={styles.dashboardContent}
+        showsVerticalScrollIndicator={false}
+      >
+        <View style={styles.pageHeaderRow}>
+          <Text style={styles.pageTitle}>Araçlar</Text>
+        </View>
+
+        <View style={styles.toolsGrid}>
+          <TouchableOpacity style={[styles.toolNavCard, { backgroundColor: '#7A0E0E', borderColor: '#7A0E0E' }]} onPress={() => navigateToPage('reels')}>
+            <Image source={require('./assets/reels_ustlenme.png')} style={[styles.toolNavIcon, { tintColor: '#fff' }]} />
+            <Text style={[styles.toolNavLabel, { color: '#fff' }]}>Reels Üstlenme</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity style={[styles.toolNavCard, { backgroundColor: '#0f0f0f', borderColor: '#0f0f0f' }]} onPress={() => navigateToPage('teneke')}>
+            <Image source={require('./assets/teneke_film_dagitimi.png')} style={[styles.toolNavIcon, { tintColor: '#fff' }]} />
+            <Text style={[styles.toolNavLabel, { color: '#fff' }]}>Teneke Film Dağıtımı</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity style={[styles.toolNavCard, { backgroundColor: '#0E2A7A', borderColor: '#0E2A7A' }]} onPress={() => navigateToPage('projectTeams')}>
+            <Image source={require('./assets/proje_takimlari.png')} style={[styles.toolNavIcon, { tintColor: '#fff' }]} />
+            <Text style={[styles.toolNavLabel, { color: '#fff' }]}>Proje Takımları</Text>
+          </TouchableOpacity>
+        </View>
+      </ScrollView>
+    );
+  };
+
+  const [pendingReelsEvent, setPendingReelsEvent] = useState(null);
+  const renderReelsUstlenme = () => {
+    const handleClaim = (event) => {
+      setPendingReelsEvent(event);
+      setConfirmDialogData({ type: 'reelsClaimStep1', message: 'Bu etkinliğin Reels sorumluluğunu üstlenmek istediğine emin misin?' });
+      setShowConfirmDialog(true);
+    };
+
+    const handleUnclaim = (event) => {
+      setPendingReelsEvent(event);
+      setConfirmDialogData({ type: 'reelsUnclaimStep1', message: 'Bu etkinlik için Reels sorumluluğunu bırakmak istediğine emin misin?' });
+      setShowConfirmDialog(true);
+    };
+
+    const filtered = eventsData
+      .filter(ev => showCompletedReels ? true : !ev.reelsPosted)
+      .sort((a, b) => {
+        const da = a.date ? new Date(a.date).getTime() : 0;
+        const db = b.date ? new Date(b.date).getTime() : 0;
+        return da - db;
+      });
+
+    return (
+      <ScrollView 
+        style={styles.dashboardScrollView}
+        contentContainerStyle={styles.dashboardContent}
+        showsVerticalScrollIndicator={false}
+      >
+        <View style={styles.pageHeaderRow}>
+          <Text style={styles.pageTitle}>Reels Üstlenme</Text>
+        </View>
+
+        <View style={styles.filterRow}>
+        <TouchableOpacity 
+            style={[styles.filterButton, showCompletedReels && styles.filterButtonActive]}
+            onPress={() => setShowCompletedReels(!showCompletedReels)}
+          >
+            <Text style={[styles.filterButtonText, showCompletedReels && styles.filterButtonTextActive]}>
+              Tamamlananları göster
+            </Text>
+        </TouchableOpacity>
+        </View>
+        
+        {filtered.length === 0 ? (
+          <View style={styles.emptyState}>
+            <Text style={styles.emptyStateText}>Gösterilecek etkinlik yok</Text>
+          </View>
+        ) : (
+          filtered.map((ev) => {
+            const assigneeName = ev.reelsAssigneeName;
+            const isMine = ev.reelsAssigneeId && ev.reelsAssigneeId === currentUser?.id;
+            return (
+              <View key={ev.id} style={[styles.reelsItemCard, ev.reelsAssigneeId ? styles.reelsItemCardClaimed : null]}>
+                <View style={styles.reelsItemInfo}>
+                  <Text style={styles.reelsItemTitle}>{ev.name}</Text>
+                  <Text style={styles.reelsItemSubtitle}>
+                    {assigneeName ? `Sorumlu: ${assigneeName}` : 'Sorumlu yok'}
+                    {ev.reelsPosted ? ' • Paylaşıldı' : ''}
+                  </Text>
+                </View>
+                {assigneeName ? (
+                  isMine ? (
+                    <TouchableOpacity style={[styles.reelsActionButton, styles.reelsUnclaim]} onPress={() => handleUnclaim(ev)}>
+                      <Text style={styles.reelsActionText}>Bırak</Text>
+                    </TouchableOpacity>
+                  ) : (
+                    <View style={styles.reelsTakenBadge}>
+                      <Text style={styles.reelsTakenText}>Üstlenildi</Text>
+                    </View>
+                  )
+                ) : (
+                  <TouchableOpacity style={[styles.reelsActionButton, styles.reelsClaim]} onPress={() => handleClaim(ev)}>
+                    <Text style={styles.reelsActionText}>Üstlen</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            );
+          })
+        )}
+      </ScrollView>
+    );
+  };
+
+  const renderTenekeFilmDagitimi = () => {
+    const handleCreateDistribution = () => {
+      setNewDistributionName('');
+      setShowCreateDistributionModal(true);
+    };
+
+    const confirmCreateDistribution = () => {
+      const name = newDistributionName.trim();
+      if (!name) {
+        setShowCreateDistributionModal(false);
+        return;
+      }
+      const newDist = {
+        id: `dist_${Date.now()}`,
+        name,
+        createdAt: new Date().toISOString(),
+        createdBy: currentUser?.name || currentUser?.displayName || null,
+        intakes: [], // [{id, amount, createdAt}]
+        receivers: [], // [{id, name, originalAmount, currentAmount, createdAt}]
+        done: false,
+      };
+      setTenekeDistributions(prev => [newDist, ...prev]);
+      setShowCreateDistributionModal(false);
+    };
+            
+            return (
+      <ScrollView 
+        style={styles.dashboardScrollView}
+        contentContainerStyle={styles.dashboardContent}
+        showsVerticalScrollIndicator={false}
+      >
+        <View style={styles.pageHeaderRow}>
+          <Text style={styles.pageTitle}>Teneke Film Dağıtımı</Text>
+        </View>
+        <TouchableOpacity style={[styles.createButton, styles.createButtonUnderTitle]} onPress={handleCreateDistribution}>
+          <Image source={require('./assets/add.png')} style={styles.createButtonIcon} />
+          <Text style={styles.createButtonText}>Dağıtım Oluştur</Text>
+        </TouchableOpacity>
+
+        {tenekeDistributions.length === 0 ? (
+          <View style={styles.emptyState}>
+            <Text style={styles.emptyStateText}>Henüz dağıtım yok</Text>
+          </View>
+        ) : (
+          tenekeDistributions.map(dist => (
+            <View key={dist.id} style={styles.distCard}>
+        <TouchableOpacity 
+                style={{ flex: 1 }}
+          onPress={() => {
+                  setSelectedDistribution(dist);
+                  navigateToPage('tenekeDistribution', { selectedDistribution: dist });
+                }}
+              >
+                <View style={styles.distCardInfo}>
+                  <Text style={styles.distCardTitle}>{dist.name}</Text>
+                  <Text style={styles.distCardSubtitle}>{new Date(dist.createdAt).toLocaleDateString('tr-TR')}</Text>
+            </View>
+              </TouchableOpacity>
+              {dist.done && (
+                <View style={styles.distDoneBadge}><Text style={styles.distDoneText}>Tamamlandı</Text></View>
+              )}
+              <TouchableOpacity 
+                style={styles.deleteButton}
+                onPress={() => {
+                  setConfirmDialogData({ type: 'tenekeDeleteDistribution', distId: dist.id, message: 'Bu dağıtımı silmek istediğine emin misin?' });
+                  setShowConfirmDialog(true);
+                }}
+              >
+                <Image source={require('./assets/delete.png')} style={styles.deleteIcon} />
+              </TouchableOpacity>
+            </View>
+          ))
+        )}
+
+        {showCreateDistributionModal && (
+          <View style={styles.confirmDialogOverlay}>
+            <View style={styles.confirmDialogBox}>
+              <Text style={styles.confirmDialogTitle}>Dağıtım Oluştur</Text>
+              <TextInput
+                style={[styles.textInput, { marginTop: 10 }]}
+                value={newDistributionName}
+                onChangeText={setNewDistributionName}
+                placeholder="Dağıtım adı"
+                placeholderTextColor="#999"
+              />
+              <View style={styles.confirmDialogButtons}>
+                <TouchableOpacity 
+                  style={styles.confirmDialogButtonCancel}
+                  onPress={() => setShowCreateDistributionModal(false)}
+                >
+                  <Text style={styles.confirmDialogButtonCancelText}>İptal</Text>
+                </TouchableOpacity>
+                <TouchableOpacity 
+                  style={styles.confirmDialogButtonConfirm}
+                  onPress={confirmCreateDistribution}
+                >
+                  <Text style={styles.confirmDialogButtonConfirmText}>Oluştur</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        )}
+      </ScrollView>
+    );
+  };
+
+  const renderProjectTeams = () => {
+    const truncateWords = (text, maxWords = 20) => {
+      if (!text) return '';
+      const words = text.split(/\s+/);
+      if (words.length <= maxWords) return text;
+      return words.slice(0, maxWords).join(' ') + '…';
+    };
+
+    const handleCreateTeam = () => {
+      setNewProjectTeamName('');
+      setNewProjectTeamDesc('');
+      setShowCreateProjectTeamModal(true);
+    };
+
+    const confirmCreateTeam = () => {
+      const name = newProjectTeamName.trim();
+      const desc = newProjectTeamDesc.trim();
+      setShowCreateProjectTeamModal(false);
+      if (!name) return;
+      const team = {
+        id: `pt_${Date.now()}`,
+        name,
+        description: desc,
+        createdAt: new Date().toISOString(),
+        createdBy: currentUser?.id || 'anon',
+        members: [currentUser?.id].filter(Boolean),
+      };
+      setProjectTeams(prev => [team, ...prev]);
+    };
+
+    const renderMemberSummary = (team) => {
+      const names = (team.members || []).slice(0, 3).map(uid => allUsers.find(u => u.id === uid)?.name || '—');
+      const moreCount = Math.max(0, (team.members?.length || 0) - 3);
+      return `${names.join(', ')}${moreCount > 0 ? ` ve ${moreCount}+` : ''}`;
+    };
+
+    return (
+      <ScrollView 
+        style={styles.dashboardScrollView}
+        contentContainerStyle={styles.dashboardContent}
+        showsVerticalScrollIndicator={false}
+      >
+        <View style={styles.pageHeaderRow}>
+          <Text style={styles.pageTitle}>Proje Takımları</Text>
+        </View>
+        <TouchableOpacity style={[styles.createButton, styles.createButtonUnderTitle]} onPress={handleCreateTeam}>
+          <Image source={require('./assets/team-create.png')} style={styles.createButtonIcon} />
+          <Text style={styles.createButtonText}>Takım oluştur</Text>
+        </TouchableOpacity>
+
+        {projectTeams.length === 0 ? (
+          <View style={styles.emptyState}>
+            <Text style={styles.emptyStateText}>Henüz proje takımı yok</Text>
+          </View>
+        ) : (
+          projectTeams.map(pt => {
+            const isCreator = pt.createdBy === currentUser?.id;
+            return (
+              <View key={pt.id} style={styles.distCard}>
+                <TouchableOpacity 
+                  style={{ flex: 1 }}
+                  onPress={() => { setSelectedProjectTeam(pt); navigateToPage('projectTeamDetail', { selectedProjectTeam: pt }); }}
+                >
+                  <View style={styles.distCardInfo}>
+                    <Text style={styles.distCardTitle}>{pt.name}</Text>
+                    <Text style={styles.distCardSubtitle}>{truncateWords(pt.description, 20)}</Text>
+                    <Text style={styles.distCardSubtitle}>{renderMemberSummary(pt)}</Text>
+                  </View>
+                </TouchableOpacity>
+                  {isCreator && (
+                    <TouchableOpacity 
+                    style={styles.deleteButton}
+                    onPress={() => { setConfirmDialogData({ type: 'projTeamDelete', teamId: pt.id, message: 'Bu proje takımını silmek istediğine emin misin?' }); setShowConfirmDialog(true); }}
+                  >
+                    <Image source={require('./assets/delete.png')} style={styles.deleteIcon} />
+                  </TouchableOpacity>
+                )}
+              </View>
+            );
+          })
+        )}
+
+        {showCreateProjectTeamModal && (
+          <View style={styles.confirmDialogOverlay}>
+            <View style={styles.confirmDialogBox}>
+              <Text style={styles.confirmDialogTitle}>Proje Takımı Oluştur</Text>
+              <TextInput style={[styles.textInput, { marginTop: 10 }]} value={newProjectTeamName} onChangeText={setNewProjectTeamName} placeholder="Takım adı" placeholderTextColor="#999" />
+              <TextInput style={[styles.textInput, { marginTop: 10 }]} value={newProjectTeamDesc} onChangeText={setNewProjectTeamDesc} placeholder="Açıklama" placeholderTextColor="#999" />
+              <View style={styles.confirmDialogButtons}>
+                <TouchableOpacity style={styles.confirmDialogButtonCancel} onPress={() => setShowCreateProjectTeamModal(false)}>
+                  <Text style={styles.confirmDialogButtonCancelText}>İptal</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.confirmDialogButtonConfirm} onPress={confirmCreateTeam}>
+                  <Text style={styles.confirmDialogButtonConfirmText}>Oluştur</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        )}
+      </ScrollView>
+    );
+  };
+
+  const renderTenekeDistribution = () => {
+    const ctxDist = navigationHistory[navigationHistory.length - 1]?.context?.selectedDistribution;
+    const currentDistId = selectedDistribution?.id || ctxDist?.id;
+    const dist = (currentDistId && tenekeDistributions.find(d => d.id === currentDistId)) || selectedDistribution || ctxDist;
+    if (!dist) return null;
+
+    const recalc = (d) => {
+      const rolled = d.intakes.reduce((s, i) => s + (Number(i.amount) || 0), 0);
+      const given = d.receivers.reduce((s, r) => s + (Number(r.currentAmount) || 0), 0);
+      const atHand = rolled - given;
+      return { rolled, given, atHand };
+    };
+
+    const updateDistById = (id, updater) => {
+      setTenekeDistributions(prev => prev.map(x => x.id === id ? updater({ ...x }) : x));
+      setSelectedDistribution(prev => prev && prev.id === id ? updater({ ...prev }) : prev);
+    };
+
+    const handleAddIntake = () => {
+      setIntakeAmountInput('');
+      setShowAddIntakeModal(true);
+    };
+
+    const confirmAddIntake = () => {
+      const amt = Math.max(0, Math.floor(Number(intakeAmountInput)) || 0);
+      setShowAddIntakeModal(false);
+      if (amt <= 0) return;
+      setConfirmDialogData({ type: 'tenekeAddIntake', amount: amt, message: `Stoka ${amt} rulo eklemek istediğine emin misin?` });
+      setShowConfirmDialog(true);
+    };
+
+    const handleAddReceiver = () => {
+      setReceiverNameInput('');
+      setReceiverAmountInput('');
+      setShowAddReceiverModal(true);
+    };
+
+    const confirmAddReceiver = () => {
+      const name = receiverNameInput.trim();
+      const amt = Math.max(0, Math.floor(Number(receiverAmountInput)) || 0);
+      setShowAddReceiverModal(false);
+      if (!name || amt <= 0) return;
+      setConfirmDialogData({ type: 'tenekeAddReceiver', name, amount: amt, message: `${name} için ${amt} rulo eklemek istediğine emin misin?` });
+      setShowConfirmDialog(true);
+    };
+
+    const handleMarkDone = () => {
+      setConfirmDialogData({ type: 'tenekeMarkDone', message: 'Bu dağıtımı tamamlandı olarak işaretlemek istediğine emin misin?' });
+      setShowConfirmDialog(true);
+    };
+
+    const { rolled, given, atHand } = recalc(dist);
+
+    return (
+      <ScrollView 
+        style={styles.dashboardScrollView}
+        contentContainerStyle={styles.dashboardContent}
+        showsVerticalScrollIndicator={false}
+      >
+        <View style={styles.pageHeaderRow}>
+          <Text style={styles.pageTitle}>{dist.name}</Text>
+          <TouchableOpacity 
+            style={styles.deleteButton}
+            onPress={() => {
+              setConfirmDialogData({ type: 'tenekeDeleteDistribution', distId: dist.id, message: 'Bu dağıtımı silmek istediğine emin misin?' });
+              setShowConfirmDialog(true);
+            }}
+          >
+            <Image source={require('./assets/delete.png')} style={styles.deleteIcon} />
+                    </TouchableOpacity>
+        </View>
+
+        <View style={styles.counterRow}>
+          <View style={styles.counterCard}>
+            <Text style={styles.counterLabel}>Eldeki</Text>
+            <Text style={styles.counterValue}>{atHand}</Text>
+          </View>
+          <View style={styles.counterCard}>
+            <Text style={styles.counterLabel}>Toplanan</Text>
+            <Text style={styles.counterValue}>{rolled}</Text>
+          </View>
+          <View style={styles.counterCard}>
+            <Text style={styles.counterLabel}>Verilen</Text>
+            <Text style={styles.counterValue}>{given}</Text>
+          </View>
+        </View>
+
+        <View style={styles.actionRow}>
+          <TouchableOpacity style={styles.smallActionButton} onPress={handleAddIntake}>
+            <Text style={styles.smallActionText}>Stok Ekle</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.smallActionButton} onPress={handleAddReceiver}>
+            <Text style={styles.smallActionText}>Alıcı Ekle</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[styles.smallActionButton, styles.smallActionWarn]} onPress={handleMarkDone}>
+            <Text style={[styles.smallActionText, styles.smallActionWarnText]}>Tamamlandı</Text>
+          </TouchableOpacity>
+        </View>
+
+        <Text style={styles.sectionTitle}>Stok Girişleri</Text>
+        {dist.intakes.length === 0 ? (
+          <View style={styles.emptyState}><Text style={styles.emptyStateText}>Kayıt yok</Text></View>
+        ) : (
+          dist.intakes.map(it => (
+            <View key={it.id} style={styles.itemRow}>
+              <View style={styles.itemInfo}>
+                <Text style={styles.itemTitle}>+{it.amount} rulo</Text>
+                <Text style={styles.itemSubtitle}>{new Date(it.createdAt).toLocaleDateString('tr-TR')}</Text>
+              </View>
+              <TouchableOpacity style={styles.deleteButton} onPress={() => {
+                updateDistById(dist.id, d => ({ ...d, intakes: d.intakes.filter(x => x.id !== it.id) }));
+              }}>
+                <Image source={require('./assets/delete.png')} style={styles.deleteIcon} />
+              </TouchableOpacity>
+            </View>
+          ))
+        )}
+
+        <Text style={styles.sectionTitle}>Alıcılar</Text>
+        {dist.receivers.length === 0 ? (
+          <View style={styles.emptyState}><Text style={styles.emptyStateText}>Kayıt yok</Text></View>
+        ) : (
+          dist.receivers.map(rc => {
+            const minusDisabled = rc.currentAmount <= 0;
+            const plusDisabled = rc.currentAmount >= rc.originalAmount;
+            return (
+              <View key={rc.id} style={styles.receiverRow}>
+                <View style={styles.receiverMain}>
+                  <Text style={styles.receiverName}>{rc.name} <Text style={styles.receiverNote}>({rc.originalAmount})</Text></Text>
+                  <View style={styles.receiverControls}>
+                    <TouchableOpacity
+                      onPress={() => updateDistById(dist.id, d => ({ ...d, receivers: d.receivers.map(x => x.id === rc.id ? { ...x, currentAmount: Math.max(0, x.currentAmount - 1) } : x) }))}
+                      disabled={minusDisabled}
+                      style={[styles.circleButton, minusDisabled && styles.circleButtonDisabled]}
+                    >
+                      <Text style={styles.circleButtonText}>−</Text>
+                    </TouchableOpacity>
+                    <Text style={styles.receiverAmount}>{rc.currentAmount}</Text>
+                    <TouchableOpacity
+                      onPress={() => updateDistById(dist.id, d => ({ ...d, receivers: d.receivers.map(x => x.id === rc.id ? { ...x, currentAmount: Math.min(x.originalAmount, x.currentAmount + 1) } : x) }))}
+                      disabled={plusDisabled}
+                      style={[styles.circleButton, plusDisabled && styles.circleButtonDisabled]}
+                    >
+                      <Text style={styles.circleButtonText}>+</Text>
+                    </TouchableOpacity>
+              </View>
+                </View>
+                <TouchableOpacity 
+                  style={styles.paidToggle}
+                  onPress={() => updateDistById(dist.id, d => ({ ...d, receivers: d.receivers.map(x => x.id === rc.id ? { ...x, paid: !x.paid } : x) }))}
+                >
+                  <Text style={styles.paidToggleText}>{rc.paid ? '☑' : '☐'} Ödeme yaptı</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.deleteButton} onPress={() => {
+                  updateDistById(dist.id, d => ({ ...d, receivers: d.receivers.filter(x => x.id !== rc.id) }));
+                }}>
+                  <Image source={require('./assets/delete.png')} style={styles.deleteIcon} />
+                </TouchableOpacity>
+              </View>
+            );
+          })
+        )}
+
+        {showAddIntakeModal && (
+          <View style={styles.confirmDialogOverlay}>
+            <View style={styles.confirmDialogBox}>
+              <Text style={styles.confirmDialogTitle}>Stok Ekle</Text>
+              <TextInput
+                style={[styles.textInput, { marginTop: 10 }]}
+                keyboardType="number-pad"
+                value={intakeAmountInput}
+                onChangeText={setIntakeAmountInput}
+                placeholder="Rulo sayısı"
+                placeholderTextColor="#999"
+              />
+              <View style={styles.confirmDialogButtons}>
+                <TouchableOpacity style={styles.confirmDialogButtonCancel} onPress={() => setShowAddIntakeModal(false)}>
+                  <Text style={styles.confirmDialogButtonCancelText}>İptal</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.confirmDialogButtonConfirm} onPress={confirmAddIntake}>
+                  <Text style={styles.confirmDialogButtonConfirmText}>Ekle</Text>
+                </TouchableOpacity>
+            </View>
+            </View>
+          </View>
+                    )}
+
+        {showAddReceiverModal && (
+          <View style={styles.confirmDialogOverlay}>
+            <View style={styles.confirmDialogBox}>
+              <Text style={styles.confirmDialogTitle}>Alıcı Ekle</Text>
+              <TextInput
+                style={[styles.textInput, { marginTop: 10 }]}
+                value={receiverNameInput}
+                onChangeText={setReceiverNameInput}
+                placeholder="İsim"
+                placeholderTextColor="#999"
+              />
+              <TextInput
+                style={[styles.textInput, { marginTop: 10 }]}
+                keyboardType="number-pad"
+                value={receiverAmountInput}
+                onChangeText={setReceiverAmountInput}
+                placeholder="Rulo sayısı"
+                placeholderTextColor="#999"
+              />
+              <View style={styles.confirmDialogButtons}>
+                <TouchableOpacity style={styles.confirmDialogButtonCancel} onPress={() => setShowAddReceiverModal(false)}>
+                  <Text style={styles.confirmDialogButtonCancelText}>İptal</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.confirmDialogButtonConfirm} onPress={confirmAddReceiver}>
+                  <Text style={styles.confirmDialogButtonConfirmText}>Ekle</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+                      </View>
+        )}
+      </ScrollView>
+    );
+  };
+
+  const renderProjectTeamDetail = () => {
+    const ctx = navigationHistory[navigationHistory.length - 1]?.context?.selectedProjectTeam;
+    const teamId = selectedProjectTeam?.id || ctx?.id;
+    const team = (teamId && projectTeams.find(t => t.id === teamId)) || selectedProjectTeam || ctx;
+    if (!team) return null;
+
+    const isCreator = team.createdBy === currentUser?.id;
+    const isMember = (team.members || []).includes(currentUser?.id);
+
+    const updateTeam = (id, updater) => {
+      setProjectTeams(prev => prev.map(t => t.id === id ? updater({ ...t }) : t));
+      setSelectedProjectTeam(prev => prev && prev.id === id ? updater({ ...prev }) : prev);
+    };
+
+    const handleDeleteTeam = () => {
+      if (!isCreator) return;
+      setConfirmDialogData({ type: 'projTeamDelete', teamId: team.id, message: 'Bu proje takımını silmek istediğine emin misin?' });
+      setShowConfirmDialog(true);
+    };
+
+    const handleAddMembers = () => {
+      setProjectMemberSelection([]);
+      setShowAddMembersToProjectModal(true);
+    };
+
+    const confirmAddMembers = () => {
+      const addIds = projectMemberSelection.filter(Boolean);
+      setShowAddMembersToProjectModal(false);
+      if (addIds.length === 0) return;
+      updateTeam(team.id, t => ({ ...t, members: Array.from(new Set([...(t.members || []), ...addIds])) }));
+    };
+
+    const handleLeave = () => {
+      if (!isMember || isCreator) return;
+      updateTeam(team.id, t => ({ ...t, members: (t.members || []).filter(id => id !== currentUser?.id) }));
+    };
+
+    const handleRemoveMember = (uid) => {
+      if (!isCreator) return;
+      if (uid === currentUser?.id) return; // creator cannot remove self
+      updateTeam(team.id, t => ({ ...t, members: (t.members || []).filter(id => id !== uid) }));
+    };
+
+    const renderMember = (uid) => {
+      const user = allUsers.find(u => u.id === uid);
+      const name = user?.name || '—';
+      const avatar = user?.profileImageUrl;
+      return (
+        <View key={uid} style={styles.memberRow}>
+          <Image source={avatar ? { uri: avatar } : require('./assets/user.png')} style={styles.memberAvatar} />
+          <Text style={styles.memberName}>{name}</Text>
+          {isCreator && uid !== currentUser?.id && (
+            <TouchableOpacity style={[styles.deleteButton, styles.memberDeleteButton]} onPress={() => handleRemoveMember(uid)}>
+              <Image source={require('./assets/delete.png')} style={styles.deleteIcon} />
+            </TouchableOpacity>
+                    )}
+                  </View>
+      );
+    };
+
+    return (
+      <ScrollView 
+        style={styles.dashboardScrollView}
+        contentContainerStyle={styles.dashboardContent}
+        showsVerticalScrollIndicator={false}
+      >
+        <View style={styles.pageHeaderRow}>
+          <Text style={styles.pageTitle}>{team.name}</Text>
+          {isCreator && (
+            <TouchableOpacity style={styles.deleteButton} onPress={handleDeleteTeam}>
+              <Image source={require('./assets/delete.png')} style={styles.deleteIcon} />
+            </TouchableOpacity>
+          )}
+          </View>
+        <View style={styles.distCard}>
+          <Text style={styles.distCardSubtitle}>{team.description}</Text>
+        </View>
+
+        <View style={styles.actionRow}>
+          {isCreator && (
+            <TouchableOpacity style={styles.smallActionButton} onPress={handleAddMembers}>
+              <Text style={styles.smallActionText}>Üye Ekle</Text>
+            </TouchableOpacity>
+          )}
+          {isMember && !isCreator && (
+            <TouchableOpacity style={[styles.smallActionButton, styles.smallActionWarn]} onPress={handleLeave}>
+              <Text style={[styles.smallActionText, styles.smallActionWarnText]}>Ayrıl</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+
+        <Text style={styles.sectionTitle}>Üyeler</Text>
+        {(team.members || []).length === 0 ? (
+          <View style={styles.emptyState}><Text style={styles.emptyStateText}>Üye yok</Text></View>
+        ) : (
+          (team.members || []).map(renderMember)
+        )}
+
+        {showAddMembersToProjectModal && (
+          <View style={styles.confirmDialogOverlay}>
+            <View style={styles.confirmDialogBox}>
+              <Text style={styles.confirmDialogTitle}>Üye Ekle</Text>
+              <View style={{ maxHeight: 300 }}>
+                <ScrollView>
+                  {allUsers
+                    .filter(u => u.id !== currentUser?.id)
+                    .filter(u => !(team.members || []).includes(u.id))
+                    .map(u => {
+                      const selected = projectMemberSelection.includes(u.id);
+                      return (
+                        <TouchableOpacity key={u.id} style={styles.memberPickRow} onPress={() => setProjectMemberSelection(prev => selected ? prev.filter(id => id !== u.id) : [...prev, u.id])}>
+                          <Image source={u.profileImageUrl ? { uri: u.profileImageUrl } : require('./assets/user.png')} style={styles.memberAvatar} />
+                          <Text style={styles.memberName}>{u.name || '—'}</Text>
+                          <Text style={styles.memberPickMark}>{selected ? '☑' : '☐'}</Text>
+        </TouchableOpacity>
+            );
+          })
+                  }
+                </ScrollView>
+              </View>
+              <View style={styles.confirmDialogButtons}>
+                <TouchableOpacity style={styles.confirmDialogButtonCancel} onPress={() => setShowAddMembersToProjectModal(false)}>
+                  <Text style={styles.confirmDialogButtonCancelText}>İptal</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.confirmDialogButtonConfirm} onPress={confirmAddMembers}>
+                  <Text style={styles.confirmDialogButtonConfirmText}>Ekle</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        )}
+      </ScrollView>
+    );
+  };
+
+  const renderTeamCreate = () => {
+    return (
+      <ScrollView 
+        style={styles.dashboardScrollView}
+        contentContainerStyle={styles.dashboardContent}
+        showsVerticalScrollIndicator={false}
+      >
+        <View style={styles.pageHeaderRow}>
+          <Text style={styles.pageTitle}>Takım Oluştur</Text>
+            </View>
+        
+        <View style={styles.formContainer}>
+          <View style={styles.inputGroup}>
+            <Text style={styles.inputLabel}>Takım Adı</Text>
+            <TextInput
+              style={styles.textInput}
+              value={teamName}
+              onChangeText={setTeamName}
+              placeholder="Takım adını girin"
+              placeholderTextColor="#999"
+            />
+              </View>
+          
+          <View style={styles.inputGroup}>
+            <Text style={styles.inputLabel}>Açıklama</Text>
+            <TextInput
+              style={[styles.textInput, styles.textArea]}
+              value={teamDescription}
+              onChangeText={setTeamDescription}
+              placeholder="Takım açıklamasını girin (opsiyonel)"
+              placeholderTextColor="#999"
+              multiline
+              numberOfLines={3}
+            />
+            </View>
+          
+          <View style={styles.inputGroup}>
+            <Text style={styles.inputLabel}>Takım Üyeleri</Text>
+        <TouchableOpacity 
+              style={styles.memberPickerButton}
+              onPress={() => setShowTeamMemberPicker(true)}
+            >
+              <Text style={styles.memberPickerButtonText}>
+                {selectedTeamMembers.length > 0 
+                  ? `${selectedTeamMembers.length} üye seçildi` 
+                  : 'Üye seçin'
+                }
+          </Text>
+              <Image source={require('./assets/team-add-member.png')} style={styles.memberPickerIcon} />
+        </TouchableOpacity>
+
+            {selectedTeamMembers.length > 0 && (
+              <View style={styles.selectedMembersContainer}>
+                {selectedTeamMembers.map((memberId) => {
+                  const member = allUsers.find(u => u.id === memberId);
+                  return (
+                    <View key={memberId} style={styles.selectedMemberItem}>
+                      <Text style={styles.selectedMemberName}>{member?.name}</Text>
+        <TouchableOpacity 
+                        style={styles.removeMemberButton}
+          onPress={() => {
+                          setSelectedTeamMembers(prev => prev.filter(id => id !== memberId));
+          }}
+        >
+                        <Image source={require('./assets/team-remove-member.png')} style={styles.removeMemberIcon} />
+                      </TouchableOpacity>
+            </View>
+                  );
+                })}
+              </View>
+            )}
+            </View>
+          
+          <TouchableOpacity 
+            style={[styles.submitButton, (!teamName.trim() || selectedTeamMembers.length === 0) && styles.submitButtonDisabled]}
+            onPress={handleCreateTeam}
+            disabled={!teamName.trim() || selectedTeamMembers.length === 0}
+          >
+            <Text style={styles.submitButtonText}>Takım Oluştur</Text>
+          </TouchableOpacity>
+          </View>
+        
+        {/* Member Picker Modal */}
+        {showTeamMemberPicker && (
+          <View style={styles.modalOverlay}>
+            <View style={styles.modalContent}>
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>Üye Seçin</Text>
+                <TouchableOpacity 
+                  style={styles.modalCloseButton}
+                  onPress={() => setShowTeamMemberPicker(false)}
+                >
+                  <Image source={require('./assets/close.png')} style={styles.modalCloseIcon} />
+        </TouchableOpacity>
+              </View>
+              
+              <ScrollView style={styles.memberList}>
+                {allUsers
+                  .filter(user => user.id !== currentUser?.id)
+                  .map((user) => {
+                    const isSelected = selectedTeamMembers.includes(user.id);
+                    return (
+        <TouchableOpacity 
+                        key={user.id}
+                        style={[styles.memberItem, isSelected && styles.memberItemSelected]}
+          onPress={() => {
+                          if (isSelected) {
+                            setSelectedTeamMembers(prev => prev.filter(id => id !== user.id));
+                          } else {
+                            setSelectedTeamMembers(prev => [...prev, user.id]);
+                          }
+                        }}
+                      >
+                        <View style={styles.memberItemContent}>
+                          <Text style={styles.memberItemName}>{user.name}</Text>
+                          {isSelected && (
+                            <View style={styles.memberItemCheckmark}>
+                              <Text style={styles.memberItemCheckmarkText}>✓</Text>
+            </View>
+                          )}
+              </View>
+                      </TouchableOpacity>
+                    );
+                  })}
+              </ScrollView>
+            </View>
+          </View>
+        )}
+      </ScrollView>
+    );
+  };
+
+  const renderTeamManagement = () => {
+    const team = navigationHistory[navigationHistory.length - 1]?.context?.selectedTeam || selectedTeam;
+    if (!team) return null;
+    
+    return (
+    <ScrollView 
+      style={styles.dashboardScrollView}
+      contentContainerStyle={styles.dashboardContent}
+      showsVerticalScrollIndicator={false}
+    >
+        <View style={styles.pageHeaderRow}>
+          <Text style={styles.pageTitle}>Takım Yönetimi</Text>
+        </View>
+        
+        <View style={styles.teamManagementContainer}>
+          <View style={styles.teamManagementHeader}>
+            <View style={[styles.teamManagementColorIndicator, { backgroundColor: team.color }]} />
+            <View style={styles.teamManagementInfo}>
+              <Text style={styles.teamManagementName}>{team.name}</Text>
+              <Text style={styles.teamManagementDescription}>
+                {team.description || 'Açıklama yok'}
+          </Text>
+            </View>
+          </View>
+          
+          <View style={styles.teamManagementSection}>
+            <View style={styles.teamManagementSectionHeader}>
+              <Text style={styles.teamManagementSectionTitle}>Takım Üyeleri</Text>
+              <TouchableOpacity 
+                style={styles.addMemberButton}
+                onPress={() => setShowTeamMemberManagement(true)}
+              >
+                <Image source={require('./assets/team-add-member.png')} style={styles.addMemberIcon} />
+                <Text style={styles.addMemberButtonText}>Üye Ekle</Text>
+        </TouchableOpacity>
+            </View>
+            
+            <View style={styles.teamManagementMembersList}>
+              {team.members?.map((memberId) => {
+                const member = allUsers.find(u => u.id === memberId);
+                const isCreator = memberId === team.createdBy;
+                return (
+                  <View key={memberId} style={styles.teamManagementMemberItem}>
+                    <View style={styles.teamManagementMemberAvatar}>
+                      <Text style={styles.teamManagementMemberAvatarText}>
+                        {member?.name?.charAt(0) || '?'}
+                      </Text>
+                    </View>
+                    <View style={styles.teamManagementMemberInfo}>
+                      <Text style={styles.teamManagementMemberName}>{member?.name || 'Bilinmeyen'}</Text>
+                      {isCreator && (
+                        <Text style={styles.teamManagementMemberRole}>Yönetici</Text>
+                      )}
+                    </View>
+                    {!isCreator && (
+        <TouchableOpacity 
+                        style={styles.removeMemberFromTeamButton}
+                        onPress={() => handleRemoveTeamMember(team.id, memberId)}
+                      >
+                        <Image source={require('./assets/team-remove-member.png')} style={styles.removeMemberFromTeamIcon} />
+          </TouchableOpacity>
+                    )}
+            </View>
+                );
+              })}
+              </View>
+            </View>
+        
+          <View style={styles.teamManagementActions}>
+            <TouchableOpacity 
+              style={styles.deleteTeamButton}
+              onPress={() => handleDeleteTeam(team.id)}
+            >
+              <Text style={styles.deleteTeamButtonText}>Takımı Sil</Text>
+            </TouchableOpacity>
+          </View>
+          </View>
+
+        {/* Add Member Modal */}
+        {showTeamMemberManagement && (
+          <View style={styles.modalOverlay}>
+            <View style={styles.modalContent}>
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>Üye Ekle</Text>
+                <TouchableOpacity 
+                  style={styles.modalCloseButton}
+                  onPress={() => setShowTeamMemberManagement(false)}
+                >
+                  <Image source={require('./assets/close.png')} style={styles.modalCloseIcon} />
+        </TouchableOpacity>
+        </View>
+        
+              <ScrollView style={styles.memberList}>
+                {allUsers
+                  .filter(user => 
+                    user.id !== currentUser?.id && 
+                    !team.members?.includes(user.id)
+                  )
+                  .map((user) => (
+        <TouchableOpacity 
+                      key={user.id}
+                      style={styles.memberItem}
+          onPress={() => {
+                        handleAddTeamMember(team.id, user.id);
+                        setShowTeamMemberManagement(false);
+                      }}
+                    >
+                      <View style={styles.memberItemContent}>
+                        <Text style={styles.memberItemName}>{user.name}</Text>
+            </View>
+                    </TouchableOpacity>
+                  ))}
+              </ScrollView>
+              </View>
+            </View>
+        )}
+      </ScrollView>
+    );
+  };
+
+  const renderTeamChat = () => {
+    const team = navigationHistory[navigationHistory.length - 1]?.context?.selectedTeam || selectedTeam;
+    console.log('Rendering team chat for team:', team);
+    console.log('Current navigation history:', navigationHistory);
+    console.log('Current page:', currentPage);
+    
+    if (!team) {
+      console.log('No team found, showing loading state');
+    return (
+        <View style={styles.teamChatContainer}>
+          <View style={styles.teamChatHeader}>
+            <Text style={styles.teamChatName}>Takım yükleniyor...</Text>
+        </View>
+          <View style={styles.teamChatMessages}>
+            <Text style={styles.emptyStateText}>Takım bilgileri yükleniyor...</Text>
+          </View>
+        </View>
+      );
+    }
+    
+    console.log('Rendering team chat with team:', team.name);
+    console.log('Team messages:', teamMessages);
+    console.log('Team replies:', teamReplies);
+    
+    return (
+      <View style={styles.teamChatContainer}>
+        <View style={styles.teamChatHeader}>
+          <View style={styles.teamChatHeaderInfo}>
+            <View style={[styles.teamChatColorIndicator, { backgroundColor: team.color }]} />
+            <View style={styles.teamChatInfo}>
+              <TouchableOpacity onPress={() => navigateToPage('teamManagement', { selectedTeam: team })}>
+                <Text style={styles.teamChatName}>{team.name}</Text>
+              </TouchableOpacity>
+              <Text style={styles.teamChatMemberCount}>
+                {team.memberCount || team.members?.length || 0} üye
+              </Text>
+            </View>
+          </View>
+        </View>
+
+      <ScrollView 
+          style={styles.teamChatMessages}
+          contentContainerStyle={styles.teamChatMessagesContent}
+          onContentSizeChange={() => {
+            // Auto-scroll to bottom when content changes
+          }}
+        >
+          {teamMessages.length === 0 ? (
+            <View style={styles.emptyState}>
+              <Text style={styles.emptyStateText}>Henüz mesaj yok. İlk mesajı siz gönderin!</Text>
+            </View>
+          ) : (
+            teamMessages.map((message) => {
+            const sender = allUsers.find(u => u.id === message.senderId);
+            const isOwnMessage = message.senderId === currentUser?.id;
+            const messageReplies = teamReplies.filter(reply => reply.parentMessageId === message.id);
+            
+            return (
+              <View key={message.id} style={styles.teamMessageContainer}>
+                <View style={[styles.teamMessage, isOwnMessage && styles.teamMessageOwn]}>
+                  <View style={styles.teamMessageHeader}>
+                    <Text style={[styles.teamMessageSender, isOwnMessage && styles.teamMessageOwnText]}>{sender?.name || 'Bilinmeyen'}</Text>
+                    <Text style={[styles.teamMessageTime, isOwnMessage && styles.teamMessageOwnText]}>{getTimeAgo(message.createdAt)}</Text>
+            </View>
+                  <Text style={[styles.teamMessageContent, isOwnMessage && styles.teamMessageOwnText]}>{message.content}</Text>
+                  
+                  <View style={styles.teamMessageActions}>
+            <TouchableOpacity 
+                      style={styles.teamMessageReplyButton}
+                      onPress={() => setReplyingToMessage(message)}
+            >
+                      <Text style={styles.teamMessageReplyText}>Yanıtla</Text>
+            </TouchableOpacity>
+          </View>
+                  
+                  {messageReplies.length > 0 && (
+                    <View style={styles.teamMessageReplies}>
+                      {messageReplies.map((reply) => {
+                        const replySender = allUsers.find(u => u.id === reply.senderId);
+                        const isOwnReply = reply.senderId === currentUser?.id;
+                        
+                        return (
+                          <View key={reply.id} style={[styles.teamMessageReply, isOwnReply && styles.teamMessageReplyOwn]}>
+                            <View style={styles.teamMessageReplyHeader}>
+                              <Text style={styles.teamMessageReplySender}>{replySender?.name || 'Bilinmeyen'}</Text>
+                              <Text style={styles.teamMessageReplyTime}>{getTimeAgo(reply.createdAt)}</Text>
+        </View>
+                            <Text style={styles.teamMessageReplyContent}>{reply.content}</Text>
+                            
+                            <View style={styles.teamMessageReplyActions}>
+                              {/* Reply actions removed */}
+                            </View>
+      </View>
+                        );
+                      })}
+                    </View>
+                  )}
+                </View>
+              </View>
+            );
+          })
+          )}
+      </ScrollView>
+        
+        {replyingToMessage && (
+          <View style={styles.teamReplyInputContainer}>
+            <View style={styles.teamReplyInputHeader}>
+              <Text style={styles.teamReplyInputHeaderText}>
+                {allUsers.find(u => u.id === replyingToMessage.senderId)?.name || 'Bilinmeyen'} kullanıcısına yanıt veriyorsunuz
+              </Text>
+              <TouchableOpacity 
+                style={styles.teamReplyInputCancelButton}
+                onPress={() => setReplyingToMessage(null)}
+              >
+                <Image source={require('./assets/close.png')} style={styles.teamReplyInputCancelIcon} />
+              </TouchableOpacity>
+            </View>
+            <View style={styles.teamReplyInputRow}>
+              <TextInput
+                style={styles.teamReplyInput}
+                value={teamReplyContent}
+                onChangeText={setTeamReplyContent}
+                placeholder="Yanıtınızı yazın..."
+                placeholderTextColor="#999"
+                multiline
+              />
+              <TouchableOpacity 
+                style={[styles.teamReplySendButton, !teamReplyContent.trim() && styles.teamReplySendButtonDisabled]}
+                onPress={handleSendTeamReply}
+                disabled={!teamReplyContent.trim()}
+              >
+                <Image source={require('./assets/send.png')} style={styles.teamReplySendIcon} />
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
+        
+        <View style={styles.teamChatInputContainer}>
+          <TextInput
+            style={styles.teamChatInput}
+            value={teamMessageContent}
+            onChangeText={setTeamMessageContent}
+            placeholder="Mesajınızı yazın..."
+            placeholderTextColor="#999"
+            multiline
+          />
+          <TouchableOpacity 
+            style={[styles.teamChatSendButton, !teamMessageContent.trim() && styles.teamChatSendButtonDisabled]}
+            onPress={handleSendTeamMessage}
+            disabled={!teamMessageContent.trim()}
+          >
+            <Image source={require('./assets/send.png')} style={styles.teamChatSendIcon} />
+          </TouchableOpacity>
+        </View>
+      </View>
     );
   };
 
@@ -1176,7 +2517,7 @@ export default function App() {
         const dayEvents = getEventsForDate(date);
         if (dayEvents.length > 0) {
           setSelectedEvent(dayEvents[0]);
-          navigateToPage('eventDetail');
+          navigateToPage('eventDetail', { selectedEvent: event });
         } else {
           // Show create event prompt for empty day
           setCreateEventPromptDate(date);
@@ -1209,8 +2550,8 @@ export default function App() {
           <TouchableOpacity onPress={goToNextMonth} style={styles.calendarNavButton}>
             <Text style={styles.calendarNavButtonText}>›</Text>
           </TouchableOpacity>
-      </View>
-
+        </View>
+        
         {/* Calendar Grid - Full Screen */}
         <View style={styles.calendarContainerFull}>
           {/* Day Names Header */}
@@ -1218,9 +2559,9 @@ export default function App() {
             {dayNames.map((dayName, index) => (
               <View key={index} style={styles.calendarDayNameCell}>
                 <Text style={styles.calendarDayNameText}>{dayName}</Text>
-              </View>
+        </View>
             ))}
-          </View>
+      </View>
 
           {/* Calendar Days Grid */}
           <View style={styles.calendarDaysGridFull}>
@@ -1261,7 +2602,7 @@ export default function App() {
                           isToday(day) && styles.calendarDayTextTodayBold,
                         ]}>
                           {day}
-                        </Text>
+        </Text>
                         {event && (
                           <Text style={styles.calendarEventNameInCell} numberOfLines={2}>
                             {event.name}
@@ -1270,15 +2611,15 @@ export default function App() {
                         {isToday(day) && !event && (
                           <View style={styles.todayIndicator} />
                         )}
-                      </View>
+      </View>
                     </>
                   ) : null}
-                </TouchableOpacity>
+          </TouchableOpacity>
               );
             })}
-          </View>
         </View>
-      </View>
+        </View>
+        </View>
     );
   };
 
@@ -1364,8 +2705,8 @@ export default function App() {
           >
             <Image source={require('./assets/camera.png')} style={styles.changePictureIconLarge} />
           </TouchableOpacity>
-        </View>
-        
+      </View>
+
         {uploadingImage && (
           <Text style={styles.uploadingText}>Yükleniyor...</Text>
         )}
@@ -1388,21 +2729,36 @@ export default function App() {
               ) : (
                 <View style={styles.memberAvatar}>
                   <Text style={styles.memberInitial}>{user.name?.charAt(0) || 'U'}</Text>
-        </View>
+          </View>
               )}
               <Text style={styles.memberName}>{user.name}</Text>
-        </View>
+          </View>
           ))}
-        </View>
+      </View>
     </ScrollView>
   );
   };
 
-  const getTimeAgo = (dateString) => {
-    if (!dateString) return 'Bilinmiyor';
+  const getTimeAgo = (dateInput) => {
+    if (!dateInput) return 'Bilinmiyor';
+    
+    let date;
+    
+    // Handle Firebase timestamp objects
+    if (dateInput && typeof dateInput === 'object' && dateInput.seconds) {
+      date = new Date(dateInput.seconds * 1000);
+    } else if (typeof dateInput === 'string') {
+      date = new Date(dateInput);
+    } else {
+      return 'Bilinmiyor';
+    }
+    
+    // Check if date is valid
+    if (isNaN(date.getTime())) {
+      return 'Bilinmiyor';
+    }
     
     const now = new Date();
-    const date = new Date(dateString);
     const diffMs = now - date;
     const diffSecs = Math.floor(diffMs / 1000);
     const diffMins = Math.floor(diffSecs / 60);
@@ -1433,7 +2789,7 @@ export default function App() {
       return (
         <View style={styles.emptyState}>
           <Text style={styles.emptyStateText}>Mesaj bulunamadı</Text>
-          </View>
+            </View>
       );
     }
 
@@ -1463,7 +2819,7 @@ export default function App() {
                 onPress={() => handleDeleteMessage(selectedMessage.id)}
                 style={styles.deleteMessageButton}
               >
-                <Text style={styles.deleteMessageButtonText}>✕</Text>
+                <Image source={require('./assets/delete.png')} style={styles.deleteMessageIcon} />
               </TouchableOpacity>
             )}
         </View>
@@ -1506,7 +2862,7 @@ export default function App() {
                         onPress={() => handleDeleteReply(reply.id)}
                         style={styles.deleteReplyButton}
                       >
-                        <Text style={styles.deleteReplyButtonText}>✕</Text>
+                        <Image source={require('./assets/delete.png')} style={styles.deleteReplyIcon} />
                       </TouchableOpacity>
                     )}
           </View>
@@ -2119,9 +3475,29 @@ export default function App() {
   };
 
   const renderEventDetail = () => {
-    const event = selectedEvent || eventsData[0];
+    const selectedId = selectedEvent?.id;
+    const event = selectedId
+      ? (eventsData.find(e => e.id === selectedId) || selectedEvent)
+      : eventsData[0];
     const eventDate = event.date ? new Date(event.date) : null;
     const monthNames = ['Ocak', 'Şubat', 'Mart', 'Nisan', 'Mayıs', 'Haziran', 'Temmuz', 'Ağustos', 'Eylül', 'Ekim', 'Kasım', 'Aralık'];
+    
+    // Handle checklist item updates
+    const handleChecklistUpdate = async (field, value) => {
+      try {
+        if (!event?.id) return;
+        
+        const updateData = { [field]: value };
+        await updateEvent(event.id, updateData);
+        
+        // Update local state
+        setSelectedEvent(prev => ({ ...prev, [field]: value }));
+        
+      } catch (error) {
+        console.error('Error updating checklist item:', error);
+        Alert.alert('Hata', 'Durum güncellenirken bir hata oluştu.');
+      }
+    };
     
     const formatDate = (date) => {
       if (!date) return '-';
@@ -2142,6 +3518,23 @@ export default function App() {
           >
             <Image source={require('./assets/edit.png')} style={styles.eventEditIcon} />
             <Text style={styles.eventEditButtonText}>Düzenle</Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* Drive Button */}
+        <View style={{ marginTop: 10, marginBottom: 10 }}>
+          <TouchableOpacity 
+            disabled={!event.driveLink}
+            onPress={() => {
+              if (event.driveLink) {
+                Linking.openURL(event.driveLink);
+              }
+            }}
+            style={[styles.driveButton, !event.driveLink && styles.driveButtonDisabled]}
+          >
+            <Text style={[styles.driveButtonText, !event.driveLink && styles.driveButtonTextDisabled]}>
+              {event.driveLink ? 'Drive klasörüne git' : 'Henüz Drive linki eklenmedi'}
+            </Text>
           </TouchableOpacity>
         </View>
 
@@ -2179,7 +3572,7 @@ export default function App() {
                   }
                 }}
               >
-                <Text style={styles.downloadImageButtonTextSmall}>⬇</Text>
+                <Image source={require('./assets/download.png')} style={styles.downloadImageButtonIconSmall} />
               </TouchableOpacity>
             </View>
           ) : (
@@ -2245,6 +3638,7 @@ export default function App() {
                   }
                 }}
               >
+                <Image source={require('./assets/copy.png')} style={styles.copyTextButtonIcon} />
                 <Text style={styles.copyTextButtonText}>Metni Kopyala</Text>
               </TouchableOpacity>
             </View>
@@ -2252,56 +3646,63 @@ export default function App() {
           </View>
         )}
 
-        {/* Action Buttons */}
-        <View style={styles.eventDetailActionsVertical}>
-          <TouchableOpacity 
-            style={[
-              styles.announcementButton, 
-              event.announced && styles.announcementButtonDisabled
-            ]}
-            onPress={() => {
-              if (!event.announced) {
-                setAnnouncementStep(1);
-                setShowAnnouncementDialog(true);
-              }
-            }}
-            disabled={event.announced}
-          >
-            <Text style={styles.announcementButtonText}>
-              {event.announced ? 'Duyuru yapıldı ✓' : 'Duyurusu yapıldı'}
-            </Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity 
-            style={[
-              styles.documentsButton, 
-              event.documentsSubmitted && styles.announcementButtonDisabled
-            ]}
-            onPress={() => {
-              if (!event.documentsSubmitted) {
-                setDocumentsStep(1);
-                setShowDocumentsDialog(true);
-              }
-            }}
-            disabled={event.documentsSubmitted}
-          >
-            <Text style={styles.documentsButtonText}>
-              {event.documentsSubmitted ? 'Belgeler teslim edildi ✓' : 'Belgeler teslim edildi'}
-            </Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity 
-            style={styles.deleteButton} 
-            onPress={() => {
-              setConfirmDialogData({
-                type: 'deleteFromDetail',
-                message: 'Bu etkinliği silmek istediğinizden emin misiniz?'
-              });
-              setShowConfirmDialog(true);
-            }}
-          >
-            <Text style={styles.deleteButtonText}>Etkinliği Sil</Text>
-          </TouchableOpacity>
+        {/* Checklist Section */}
+        <View style={styles.checklistSection}>
+          <Text style={styles.checklistTitle}>Etkinlik Durumu</Text>
+          <View style={styles.checklistGrid}>
+            <View style={styles.checklistRow}>
+              <TouchableOpacity 
+                style={styles.checklistItem}
+                onPress={() => handleChecklistUpdate('whatsappAnnounced', !event.whatsappAnnounced)}
+                activeOpacity={0.7}
+              >
+                <View style={styles.checklistCheckbox}>
+                  <Text style={styles.checklistCheckboxText}>
+                    {event.whatsappAnnounced ? '☑' : '☐'}
+                  </Text>
+                </View>
+                <Text style={styles.checklistItemText}>WhatsApp duyurusu yapıldı</Text>
+              </TouchableOpacity>
+              <TouchableOpacity 
+                style={styles.checklistItem}
+                onPress={() => handleChecklistUpdate('instagramAnnounced', !event.instagramAnnounced)}
+                activeOpacity={0.7}
+              >
+                <View style={styles.checklistCheckbox}>
+                  <Text style={styles.checklistCheckboxText}>
+                    {event.instagramAnnounced ? '☑' : '☐'}
+                  </Text>
+                </View>
+                <Text style={styles.checklistItemText}>Instagram duyurusu yapıldı</Text>
+              </TouchableOpacity>
+            </View>
+            <View style={styles.checklistRow}>
+              <TouchableOpacity 
+                style={styles.checklistItem}
+                onPress={() => handleChecklistUpdate('reelsPosted', !event.reelsPosted)}
+                activeOpacity={0.7}
+              >
+                <View style={styles.checklistCheckbox}>
+                  <Text style={styles.checklistCheckboxText}>
+                    {event.reelsPosted ? '☑' : '☐'}
+                  </Text>
+                </View>
+                <Text style={styles.checklistItemText}>Etkinlik reelsi atıldı</Text>
+              </TouchableOpacity>
+              <TouchableOpacity 
+                style={styles.checklistItem}
+                onPress={() => handleChecklistUpdate('documentsSubmitted', !event.documentsSubmitted)}
+                activeOpacity={0.7}
+              >
+                <View style={styles.checklistCheckbox}>
+                  <Text style={styles.checklistCheckboxText}>
+                    {event.documentsSubmitted ? '☑' : '☐'}
+                  </Text>
+                </View>
+                <Text style={styles.checklistItemText}>Belgeler teslim edildi</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
         </View>
       </ScrollView>
     );
@@ -2310,6 +3711,22 @@ export default function App() {
   const renderEventEdit = () => {
     const event = selectedEvent || eventsData[0];
     const eventDate = event.date ? new Date(event.date) : null;
+    const debouncedUpdate = (field, value, delay = 600) => {
+      if (!event?.id) return;
+      const timers = eventEditSaveTimersRef.current;
+      if (timers[field]) {
+        clearTimeout(timers[field]);
+      }
+      timers[field] = setTimeout(async () => {
+        try {
+          await updateEvent(event.id, { [field]: value });
+          setSelectedEvent(prev => prev ? { ...prev, [field]: value } : prev);
+          setEventsData(prev => prev.map(e => e.id === event.id ? { ...e, [field]: value } : e));
+        } catch (e) {
+          console.log('Autosave failed for', field, e?.message);
+        }
+      }, delay);
+    };
     
     const handleDeleteEvent = () => {
       setConfirmDialogData({
@@ -2339,9 +3756,8 @@ export default function App() {
         // Launch image picker
         const result = await ImagePicker.launchImageLibraryAsync({
           mediaTypes: ImagePicker.MediaTypeOptions.Images,
-          allowsEditing: true,
-          aspect: [16, 9],
-          quality: 0.8,
+          allowsEditing: false,
+          quality: 1.0,
         });
 
         if (!result.canceled && result.assets[0]) {
@@ -2363,6 +3779,34 @@ export default function App() {
         }
       } catch (error) {
         console.error('Error picking image:', error);
+      }
+    };
+    
+    // Handle checklist item updates
+    const handleChecklistUpdate = async (field, value) => {
+      try {
+        if (!selectedEvent?.id) return;
+        
+        const updateData = { [field]: value };
+        await updateEvent(selectedEvent.id, updateData);
+        
+        // Update local state
+        setSelectedEvent(prev => ({ ...prev, [field]: value }));
+        
+        // Show success message
+        const fieldNames = {
+          whatsappAnnounced: 'WhatsApp duyurusu',
+          instagramAnnounced: 'Instagram duyurusu', 
+          reelsPosted: 'Reels paylaşımı',
+          documentsSubmitted: 'Belge teslimi'
+        };
+        
+        const action = value ? 'tamamlandı' : 'iptal edildi';
+        showToastNotification(`${fieldNames[field]} ${action}`);
+        
+      } catch (error) {
+        console.error('Error updating checklist item:', error);
+        Alert.alert('Hata', 'Durum güncellenirken bir hata oluştu.');
       }
     };
     
@@ -2389,7 +3833,7 @@ export default function App() {
               placeholder="Etkinlik adı"
           placeholderTextColor="#999"
               value={editEventName}
-              onChangeText={setEditEventName}
+          onChangeText={(v) => { setEditEventName(v); debouncedUpdate('name', v); }}
         />
       </View>
 
@@ -2412,9 +3856,7 @@ export default function App() {
                 onPress={handlePickEventImage}
                 disabled={uploadingImage}
               >
-                <Text style={styles.downloadImageButtonTextSmall}>
-                  {uploadingImage ? '⏳' : '📷'}
-                </Text>
+                <Image source={require('./assets/picture-upload.png')} style={styles.downloadImageButtonIconSmall} />
               </TouchableOpacity>
             </View>
 
@@ -2439,7 +3881,7 @@ export default function App() {
                   placeholder="Saat"
           placeholderTextColor="#999"
                   value={editEventTime}
-                  onChangeText={setEditEventTime}
+          onChangeText={(v) => { setEditEventTime(v); debouncedUpdate('time', v); }}
         />
       </View>
 
@@ -2450,7 +3892,7 @@ export default function App() {
                   placeholder="Konum"
           placeholderTextColor="#999"
                   value={editEventLocation}
-                  onChangeText={setEditEventLocation}
+          onChangeText={(v) => { setEditEventLocation(v); debouncedUpdate('location', v); }}
         />
       </View>
 
@@ -2490,57 +3932,86 @@ export default function App() {
               multiline
               numberOfLines={6}
               value={editEventText}
-              onChangeText={setEditEventText}
+            onChangeText={(v) => { setEditEventText(v); debouncedUpdate('text', v, 800); }}
+        />
+      </View>
+
+        {/* Drive Link */}
+        <View style={styles.eventDetailSection}>
+          <Text style={styles.eventDetailSectionTitle}>Drive linki</Text>
+          <TextInput
+            style={styles.formInput}
+            placeholder="https://drive.google.com/..."
+            placeholderTextColor="#999"
+            value={typeof editDriveLink === 'string' && editDriveLink.length > 0 ? editDriveLink : (event.driveLink || '')}
+            onChangeText={(v) => { setEditDriveLink(v); debouncedUpdate('driveLink', v, 600); }}
+            autoCapitalize="none"
+            autoCorrect={false}
         />
       </View>
 
           {/* Action Buttons */}
           <View style={styles.eventDetailActionsVertical}>
-            <TouchableOpacity 
-              style={[
-                styles.announcementButton, 
-                event.announced && styles.announcementButtonDisabled
-              ]}
-              onPress={() => {
-                if (!event.announced) {
-                  setAnnouncementStep(1);
-                  setShowAnnouncementDialog(true);
-                }
-              }}
-              disabled={event.announced}
-            >
-              <Text style={styles.announcementButtonText}>
-                {event.announced ? 'Duyuru yapıldı ✓' : 'Duyurusu yapıldı'}
-              </Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity 
-              style={[
-                styles.documentsButton, 
-                event.documentsSubmitted && styles.announcementButtonDisabled
-              ]}
-              onPress={() => {
-                if (!event.documentsSubmitted) {
-                  setDocumentsStep(1);
-                  setShowDocumentsDialog(true);
-                }
-              }}
-              disabled={event.documentsSubmitted}
-            >
-              <Text style={styles.documentsButtonText}>
-                {event.documentsSubmitted ? 'Belgeler teslim edildi ✓' : 'Belgeler teslim edildi'}
-              </Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity style={styles.submitButton} onPress={handleSaveChanges}>
-              <Text style={styles.submitButtonText}>Değişiklikleri Kaydet</Text>
-            </TouchableOpacity>
+            {/* Checklist Section */}
+            <View style={styles.checklistSection}>
+              <Text style={styles.checklistTitle}>Etkinlik Durumu</Text>
+              <View style={styles.checklistGrid}>
+                <View style={styles.checklistRow}>
+                  <TouchableOpacity 
+                    style={styles.checklistItem}
+                    onPress={() => handleChecklistUpdate('whatsappAnnounced', !event.whatsappAnnounced)}
+                  >
+                    <View style={styles.checklistCheckbox}>
+                      <Text style={styles.checklistCheckboxText}>
+                        {event.whatsappAnnounced ? '☑' : '☐'}
+                      </Text>
+                    </View>
+                    <Text style={styles.checklistItemText}>WhatsApp duyurusu yapıldı</Text>
+        </TouchableOpacity>
+                  <TouchableOpacity 
+                    style={styles.checklistItem}
+                    onPress={() => handleChecklistUpdate('instagramAnnounced', !event.instagramAnnounced)}
+                  >
+                    <View style={styles.checklistCheckbox}>
+                      <Text style={styles.checklistCheckboxText}>
+                        {event.instagramAnnounced ? '☑' : '☐'}
+                      </Text>
+                    </View>
+                    <Text style={styles.checklistItemText}>Instagram duyurusu yapıldı</Text>
+                  </TouchableOpacity>
+                </View>
+                <View style={styles.checklistRow}>
+                  <TouchableOpacity 
+                    style={styles.checklistItem}
+                    onPress={() => handleChecklistUpdate('reelsPosted', !event.reelsPosted)}
+                  >
+                    <View style={styles.checklistCheckbox}>
+                      <Text style={styles.checklistCheckboxText}>
+                        {event.reelsPosted ? '☑' : '☐'}
+                      </Text>
+                    </View>
+                    <Text style={styles.checklistItemText}>Etkinlik reelsi atıldı</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity 
+                    style={styles.checklistItem}
+                    onPress={() => handleChecklistUpdate('documentsSubmitted', !event.documentsSubmitted)}
+                  >
+                    <View style={styles.checklistCheckbox}>
+                      <Text style={styles.checklistCheckboxText}>
+                        {event.documentsSubmitted ? '☑' : '☐'}
+                      </Text>
+                    </View>
+                    <Text style={styles.checklistItemText}>Belgeler teslim edildi</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+      </View>
 
             <TouchableOpacity style={styles.deleteButton} onPress={handleDeleteEvent}>
               <Text style={styles.deleteButtonText}>Etkinliği Sil</Text>
-        </TouchableOpacity>
+            </TouchableOpacity>
       </View>
-        </ScrollView>
+    </ScrollView>
 
         {/* Date Picker Modal for Edit */}
         {showEditDatePicker && (
@@ -2578,6 +4049,14 @@ export default function App() {
                       onPress={() => {
                         setEditEventDate(date);
                         setShowEditDatePicker(false);
+                        try {
+                          if (event?.id) {
+                            const iso = new Date(date).toISOString().split('T')[0];
+                            updateEvent(event.id, { date: iso });
+                            setSelectedEvent(prev => prev ? { ...prev, date: iso } : prev);
+                            setEventsData(prev => prev.map(e => e.id === event.id ? { ...e, date: iso } : e));
+                          }
+                        } catch {}
                       }}
                     >
                       <Text style={[
@@ -2748,6 +4227,14 @@ export default function App() {
             </TouchableOpacity>
 
             <TouchableOpacity 
+              style={[styles.menuItem, currentPage === 'tools' && styles.menuItemActive]} 
+              onPress={() => navigateTo('tools')}
+            >
+              <Image source={require('./assets/tools.png')} style={styles.menuIcon} />
+              <Text style={styles.menuItemText}>Araçlar</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity 
               style={[styles.menuItem, currentPage === 'calendar' && styles.menuItemActive]} 
               onPress={() => navigateTo('calendar')}
             >
@@ -2828,6 +4315,33 @@ export default function App() {
           </View>
 
           {/* Page Content */}
+          {/* Header with back button for detail pages */}
+          {(currentPage === 'messageDetail' || currentPage === 'eventDetail' || currentPage === 'eventEdit' || currentPage === 'messageCreate' || currentPage === 'eventCreate') && (
+            <View style={styles.detailHeader}>
+              <TouchableOpacity 
+                style={styles.backButton}
+                onPress={() => {
+                  const target = getPreferredBackTarget();
+                  if (target) {
+                    navigateToPage(target);
+                  } else {
+                    navigateBack();
+                  }
+                }}
+              >
+                <Image source={require('./assets/back.png')} style={styles.backButtonIcon} />
+                <Text style={styles.backButtonText}>Geri</Text>
+              </TouchableOpacity>
+              <Text style={styles.detailHeaderTitle}>
+                {currentPage === 'messageDetail' && 'Mesaj Detayı'}
+                {currentPage === 'eventDetail' && 'Etkinlik Detayı'}
+                {currentPage === 'eventEdit' && 'Etkinlik Düzenle'}
+                {currentPage === 'messageCreate' && 'Mesaj Oluştur'}
+                {currentPage === 'eventCreate' && 'Etkinlik Oluştur'}
+              </Text>
+              <View style={styles.detailHeaderSpacer} />
+            </View>
+          )}
           {renderPageContent()}
 
           {/* Notifications Dropdown */}
@@ -2920,7 +4434,7 @@ export default function App() {
         {showConfirmDialog && (
           <View style={styles.confirmDialogOverlay}>
             <View style={styles.confirmDialogBox}>
-              <Text style={styles.confirmDialogTitle}>Emin misiniz?</Text>
+              <Text style={styles.confirmDialogTitle}>Emin misin?</Text>
               <Text style={styles.confirmDialogMessage}>{confirmDialogData.message}</Text>
               <View style={styles.confirmDialogButtons}>
                 <TouchableOpacity 
@@ -3951,6 +5465,11 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: '#fff',
   },
+  createButtonUnderTitle: {
+    alignSelf: 'flex-start',
+    marginTop: 6,
+    marginBottom: 16,
+  },
   // Event Card Large
   eventCardLarge: {
     width: '100%',
@@ -3960,15 +5479,349 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     position: 'relative',
   },
-  pastEventWhiteOverlay: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: 'rgba(255, 255, 255, 0.6)',
-    zIndex: 1,
+  toolsGrid: {
+    gap: 12,
   },
+  toolNavCard: {
+    width: '100%',
+    borderRadius: 12,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#ddd',
+    backgroundColor: '#fff',
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  toolNavIcon: {
+    width: 28,
+    height: 28,
+    tintColor: '#111',
+    marginRight: 12,
+  },
+  toolNavLabel: {
+    fontFamily: 'Inter_18pt-Medium',
+    fontSize: 15,
+    color: '#111',
+  },
+  driveButton: {
+    backgroundColor: '#0E2A7A',
+    paddingVertical: 10,
+    borderRadius: 10,
+    alignItems: 'center',
+  },
+  driveButtonDisabled: {
+    backgroundColor: '#ddd',
+  },
+  driveButtonText: {
+    fontFamily: 'Inter_18pt-Medium',
+    fontSize: 14,
+    color: '#fff',
+  },
+  driveButtonTextDisabled: {
+    color: '#777',
+  },
+  // Teneke list
+  distCard: {
+    width: '100%',
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: '#ddd',
+    marginBottom: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  distCardInfo: {
+    flexShrink: 1,
+    paddingRight: 12,
+  },
+  distCardTitle: {
+    fontFamily: 'Inter_18pt-Medium',
+    fontSize: 16,
+    color: '#111',
+    marginBottom: 4,
+  },
+  distCardSubtitle: {
+    fontFamily: 'Inter_18pt-Regular',
+    fontSize: 12,
+    color: '#555',
+  },
+  distDoneBadge: {
+    backgroundColor: '#EAF7EE',
+    borderColor: '#CFE9D6',
+    borderWidth: 1,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+  },
+  distDoneText: {
+    fontFamily: 'Inter_18pt-Medium',
+    fontSize: 12,
+    color: '#2e7d32',
+  },
+  // Teneke distribution detail
+  counterRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 12,
+  },
+  counterCard: {
+    flex: 1,
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#ddd',
+    paddingVertical: 12,
+    alignItems: 'center',
+    marginRight: 8,
+  },
+  counterLabel: {
+    fontFamily: 'Inter_18pt-Regular',
+    fontSize: 12,
+    color: '#555',
+  },
+  counterValue: {
+    fontFamily: 'Inter_18pt-Bold',
+    fontSize: 18,
+    color: '#111',
+    marginTop: 4,
+  },
+  actionRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 12,
+  },
+  smallActionButton: {
+    flex: 1,
+    backgroundColor: '#fff',
+    borderColor: '#ddd',
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingVertical: 10,
+    alignItems: 'center',
+    marginRight: 8,
+  },
+  smallActionWarn: {
+    borderColor: '#9e2a2a',
+  },
+  smallActionText: {
+    fontFamily: 'Inter_18pt-Medium',
+    fontSize: 14,
+    color: '#111',
+  },
+  smallActionWarnText: {
+    color: '#9e2a2a',
+  },
+  sectionTitle: {
+    fontFamily: 'Inter_18pt-Medium',
+    fontSize: 14,
+    color: '#111',
+    marginTop: 8,
+    marginBottom: 8,
+  },
+  itemRow: {
+    width: '100%',
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#ddd',
+    padding: 12,
+    marginBottom: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  itemInfo: {
+    flexShrink: 1,
+    paddingRight: 12,
+  },
+  itemTitle: {
+    fontFamily: 'Inter_18pt-Medium',
+    fontSize: 14,
+    color: '#111',
+    marginBottom: 4,
+  },
+  itemSubtitle: {
+    fontFamily: 'Inter_18pt-Regular',
+    fontSize: 12,
+    color: '#555',
+  },
+  deleteButton: {
+    padding: 6,
+  },
+  deleteIcon: {
+    width: 20,
+    height: 20,
+    tintColor: '#9e2a2a',
+  },
+  receiverRow: {
+    width: '100%',
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#ddd',
+    padding: 12,
+    marginBottom: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  receiverMain: {
+    flex: 1,
+    paddingRight: 12,
+  },
+  receiverName: {
+    fontFamily: 'Inter_18pt-Medium',
+    fontSize: 14,
+    color: '#111',
+    marginBottom: 6,
+  },
+  receiverNote: {
+    fontFamily: 'Inter_18pt-Regular',
+    fontSize: 12,
+    color: '#777',
+  },
+  receiverControls: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  paidToggle: {
+    marginRight: 8,
+  },
+  paidToggleText: {
+    fontFamily: 'Inter_18pt-Regular',
+    fontSize: 12,
+    color: '#111',
+  },
+  receiverAmount: {
+    width: 36,
+    textAlign: 'center',
+    fontFamily: 'Inter_18pt-Medium',
+    fontSize: 14,
+    color: '#111',
+  },
+  circleButton: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#ddd',
+    backgroundColor: '#fff',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  circleButtonDisabled: {
+    opacity: 0.4,
+  },
+  circleButtonText: {
+    fontFamily: 'Inter_18pt-Medium',
+    fontSize: 16,
+    color: '#111',
+    marginTop: -1,
+  },
+  // Project Teams styles
+  memberRow: {
+    width: '100%',
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#ddd',
+    padding: 10,
+    marginBottom: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-start',
+  },
+  memberAvatar: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    marginRight: 10,
+  },
+  memberName: {
+    flex: 1,
+    fontFamily: 'Inter_18pt-Medium',
+    fontSize: 14,
+    color: '#111',
+  },
+  memberPickRow: {
+    width: '100%',
+    paddingVertical: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  memberPickMark: {
+    fontFamily: 'Inter_18pt-Medium',
+    fontSize: 16,
+    color: '#111',
+  },
+  memberDeleteButton: {
+    marginLeft: 'auto',
+  },
+  reelsItemCard: {
+    width: '100%',
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: '#ddd',
+    marginBottom: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  reelsItemCardClaimed: {
+    backgroundColor: '#EAF7EE',
+    borderColor: '#CFE9D6',
+  },
+  reelsItemInfo: {
+    flexShrink: 1,
+    paddingRight: 12,
+  },
+  reelsItemTitle: {
+    fontFamily: 'Inter_18pt-Medium',
+    fontSize: 16,
+    color: '#111',
+    marginBottom: 4,
+  },
+  reelsItemSubtitle: {
+    fontFamily: 'Inter_18pt-Regular',
+    fontSize: 12,
+    color: '#555',
+  },
+  reelsActionButton: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 8,
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#ddd',
+  },
+  reelsClaim: {
+    borderColor: '#2e7d32',
+  },
+  reelsUnclaim: {
+    borderColor: '#9e2a2a',
+  },
+  reelsActionText: {
+    fontFamily: 'Inter_18pt-Medium',
+    fontSize: 13,
+    color: '#111',
+  },
+  reelsTakenBadge: {
+    backgroundColor: '#333',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+  },
+  reelsTakenText: {
+    fontFamily: 'Inter_18pt-Medium',
+    fontSize: 12,
+    color: '#fff',
+  },
+  
   eventContentLarge: {
     position: 'absolute',
     left: 0,
@@ -4032,6 +5885,16 @@ const styles = StyleSheet.create({
     textShadowColor: '#000',
     textShadowOffset: { width: 0.5, height: 0.5 },
     textShadowRadius: 2,
+  },
+  tagsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+    marginTop: 6,
+  },
+  tagTile: {
+    width: '48%',
+    marginBottom: 6,
   },
   backupCaptainBadge: {
     alignSelf: 'flex-start',
@@ -4395,7 +6258,7 @@ const styles = StyleSheet.create({
     marginRight: 10,
   },
   sendButton: {
-    backgroundColor: '#007AFF',
+    backgroundColor: '#f0f0f0',
     width: 36,
     height: 36,
     borderRadius: 18,
@@ -4576,7 +6439,7 @@ const styles = StyleSheet.create({
     color: '#fff',
   },
   deleteButton: {
-    backgroundColor: '#FF3B30',
+    backgroundColor: '#f0f0f0',
     paddingVertical: 15,
     borderRadius: 10,
     alignItems: 'center',
@@ -4585,7 +6448,7 @@ const styles = StyleSheet.create({
   deleteButtonText: {
     fontFamily: 'Inter_18pt-Bold',
     fontSize: 16,
-    color: '#fff',
+    color: '#333',
   },
   imageUploadButton: {
     flexDirection: 'row',
@@ -4846,7 +6709,7 @@ const styles = StyleSheet.create({
   },
   confirmDialogButtonConfirm: {
     flex: 1,
-    backgroundColor: '#007AFF',
+    backgroundColor: '#f0f0f0',
     paddingVertical: 12,
     borderRadius: 10,
     alignItems: 'center',
@@ -4854,7 +6717,7 @@ const styles = StyleSheet.create({
   confirmDialogButtonConfirmText: {
     fontFamily: 'Inter_18pt-Medium',
     fontSize: 16,
-    color: '#fff',
+    color: '#333',
   },
   // Login Screen Styles
   loginContainer: {
@@ -5016,7 +6879,7 @@ const styles = StyleSheet.create({
     width: 28,
     height: 28,
     borderRadius: 14,
-    backgroundColor: '#FF3B30',
+    backgroundColor: '#f0f0f0',
     justifyContent: 'center',
     alignItems: 'center',
     marginLeft: 'auto',
@@ -5030,7 +6893,7 @@ const styles = StyleSheet.create({
     width: 24,
     height: 24,
     borderRadius: 12,
-    backgroundColor: '#FF3B30',
+    backgroundColor: '#f0f0f0',
     justifyContent: 'center',
     alignItems: 'center',
     marginLeft: 'auto',
@@ -5039,6 +6902,21 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_18pt-Bold',
     fontSize: 12,
     color: '#fff',
+  },
+  deleteNotificationIcon: {
+    width: 16,
+    height: 16,
+    tintColor: '#333',
+  },
+  deleteMessageIcon: {
+    width: 16,
+    height: 16,
+    tintColor: '#333',
+  },
+  deleteReplyIcon: {
+    width: 14,
+    height: 14,
+    tintColor: '#333',
   },
   notificationCard: {
     backgroundColor: '#fff',
@@ -5301,18 +7179,26 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   copyTextButton: {
-    backgroundColor: '#007AFF',
+    backgroundColor: '#f0f0f0',
     paddingVertical: 8,
     paddingHorizontal: 12,
     borderRadius: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
   },
   copyTextButtonText: {
     fontFamily: 'Inter_18pt-Medium',
     fontSize: 14,
-    color: '#fff',
+    color: '#333',
+  },
+  copyTextButtonIcon: {
+    width: 16,
+    height: 16,
+    marginRight: 6,
+    tintColor: '#333',
   },
   downloadImageButton: {
-    backgroundColor: '#007AFF',
+    backgroundColor: '#f0f0f0',
     paddingVertical: 8,
     paddingHorizontal: 12,
     borderRadius: 8,
@@ -5320,7 +7206,7 @@ const styles = StyleSheet.create({
   downloadImageButtonText: {
     fontFamily: 'Inter_18pt-Medium',
     fontSize: 14,
-    color: '#fff',
+    color: '#333',
   },
   eventCardsContainer: {
     paddingRight: 16,
@@ -5409,6 +7295,11 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#fff',
   },
+  downloadImageButtonIconSmall: {
+    width: 16,
+    height: 16,
+    tintColor: '#fff',
+  },
   eventDetailInfoContainer: {
     flex: 1,
     justifyContent: 'space-between',
@@ -5464,6 +7355,821 @@ const styles = StyleSheet.create({
   toastText: {
     fontFamily: 'Inter_18pt-Medium',
     fontSize: 14,
+    color: '#fff',
+  },
+  // Detail Header Styles
+  detailHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    backgroundColor: '#fff',
+    borderBottomWidth: 1,
+    borderBottomColor: '#e0e0e0',
+  },
+  backButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    backgroundColor: '#f5f5f5',
+  },
+  backButtonIcon: {
+    width: 16,
+    height: 16,
+    marginRight: 6,
+    tintColor: '#333',
+  },
+  backButtonText: {
+    fontFamily: 'Inter_18pt-Medium',
+    fontSize: 14,
+    color: '#333',
+  },
+  detailHeaderTitle: {
+    flex: 1,
+    fontFamily: 'Inter_18pt-Bold',
+    fontSize: 18,
+    color: '#000',
+    textAlign: 'center',
+    marginHorizontal: 16,
+  },
+  detailHeaderSpacer: {
+    width: 60, // Same width as back button to center the title
+  },
+  // Checklist Styles
+  checklistSection: {
+    backgroundColor: '#fff',
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    marginTop: 16,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#e0e0e0',
+  },
+  checklistTitle: {
+    fontFamily: 'Inter_18pt-Bold',
+    fontSize: 16,
+    color: '#000',
+    marginBottom: 12,
+    textAlign: 'center',
+  },
+  checklistGrid: {
+    gap: 12,
+  },
+  checklistRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  checklistItem: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    backgroundColor: '#f8f9fa',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#e9ecef',
+  },
+  checklistItemPressed: {
+    backgroundColor: '#e9ecef',
+    borderColor: '#dee2e6',
+  },
+  checklistCheckbox: {
+    marginRight: 8,
+  },
+  checklistCheckboxText: {
+    fontFamily: 'Inter_18pt-Medium',
+    fontSize: 16,
+    color: '#6c757d',
+  },
+  checklistItemText: {
+    fontFamily: 'Inter_18pt-Medium',
+    fontSize: 14,
+    color: '#495057',
+    flex: 1,
+  },
+  
+  // Team Styles
+  teamCard: {
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  teamCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    marginBottom: 12,
+  },
+  teamColorIndicator: {
+    width: 4,
+    height: 40,
+    borderRadius: 2,
+    marginRight: 12,
+  },
+  teamCardInfo: {
+    flex: 1,
+  },
+  teamCardName: {
+    fontFamily: 'Inter_18pt-Bold',
+    fontSize: 16,
+    color: '#333',
+    marginBottom: 4,
+  },
+  teamCardDescription: {
+    fontFamily: 'Inter_18pt-Regular',
+    fontSize: 14,
+    color: '#666',
+    lineHeight: 20,
+  },
+  teamSettingsButton: {
+    padding: 8,
+  },
+  teamSettingsIcon: {
+    width: 20,
+    height: 20,
+    tintColor: '#666',
+  },
+  teamCardFooter: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  teamCardStats: {
+    flex: 1,
+  },
+  teamMemberCount: {
+    fontFamily: 'Inter_18pt-Medium',
+    fontSize: 12,
+    color: '#666',
+    marginBottom: 2,
+  },
+  teamLastActivity: {
+    fontFamily: 'Inter_18pt-Regular',
+    fontSize: 11,
+    color: '#999',
+  },
+  teamCardBadges: {
+    flexDirection: 'row',
+    gap: 6,
+  },
+  teamMemberBadge: {
+    backgroundColor: '#E3F2FD',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  teamMemberBadgeText: {
+    fontFamily: 'Inter_18pt-Medium',
+    fontSize: 10,
+    color: '#1976D2',
+  },
+  teamCreatorBadge: {
+    backgroundColor: '#E8F5E9',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  teamCreatorBadgeText: {
+    fontFamily: 'Inter_18pt-Medium',
+    fontSize: 10,
+    color: '#4CAF50',
+  },
+  
+  // Team Create Styles
+  formContainer: {
+    padding: 16,
+  },
+  inputGroup: {
+    marginBottom: 20,
+  },
+  inputLabel: {
+    fontFamily: 'Inter_18pt-Medium',
+    fontSize: 14,
+    color: '#333',
+    marginBottom: 8,
+  },
+  textInput: {
+    borderWidth: 1,
+    borderColor: '#ddd',
+    borderRadius: 8,
+    padding: 12,
+    fontSize: 16,
+    fontFamily: 'Inter_18pt-Regular',
+    backgroundColor: '#fff',
+  },
+  textArea: {
+    height: 80,
+    textAlignVertical: 'top',
+  },
+  memberPickerButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderWidth: 1,
+    borderColor: '#ddd',
+    borderRadius: 8,
+    padding: 12,
+    backgroundColor: '#fff',
+  },
+  memberPickerButtonText: {
+    fontFamily: 'Inter_18pt-Regular',
+    fontSize: 16,
+    color: '#333',
+  },
+  memberPickerIcon: {
+    width: 20,
+    height: 20,
+    tintColor: '#666',
+  },
+  selectedMembersContainer: {
+    marginTop: 8,
+  },
+  selectedMemberItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#f8f9fa',
+    padding: 8,
+    borderRadius: 6,
+    marginBottom: 4,
+  },
+  selectedMemberName: {
+    fontFamily: 'Inter_18pt-Medium',
+    fontSize: 14,
+    color: '#333',
+  },
+  removeMemberButton: {
+    padding: 4,
+  },
+  removeMemberIcon: {
+    width: 16,
+    height: 16,
+    tintColor: '#666',
+  },
+  
+  // Team Styles
+  teamMembersList: {
+    gap: 8,
+  },
+  teamMemberItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 12,
+    backgroundColor: '#f8f9fa',
+    borderRadius: 8,
+  },
+  teamMemberAvatar: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#007AFF',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
+  },
+  teamMemberAvatarText: {
+    fontFamily: 'Inter_18pt-Bold',
+    fontSize: 16,
+    color: '#fff',
+  },
+  teamMemberInfo: {
+    flex: 1,
+  },
+  teamMemberName: {
+    fontFamily: 'Inter_18pt-Medium',
+    fontSize: 16,
+    color: '#333',
+    marginBottom: 2,
+  },
+  teamMemberRole: {
+    fontFamily: 'Inter_18pt-Regular',
+    fontSize: 12,
+    color: '#666',
+  },
+  teamDetailActions: {
+    gap: 12,
+  },
+  teamActionButton: {
+    backgroundColor: '#007AFF',
+    paddingVertical: 15,
+    borderRadius: 10,
+    alignItems: 'center',
+  },
+  teamActionButtonText: {
+    fontFamily: 'Inter_18pt-Bold',
+    fontSize: 16,
+    color: '#fff',
+  },
+  teamActionButtonDisabled: {
+    backgroundColor: '#f0f0f0',
+    paddingVertical: 15,
+    borderRadius: 10,
+    alignItems: 'center',
+  },
+  teamActionButtonTextDisabled: {
+    fontFamily: 'Inter_18pt-Medium',
+    fontSize: 14,
+    color: '#999',
+    textAlign: 'center',
+  },
+  teamLeaveButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#f0f0f0',
+    paddingVertical: 15,
+    borderRadius: 10,
+  },
+  teamLeaveIcon: {
+    width: 20,
+    height: 20,
+    tintColor: '#333',
+    marginRight: 8,
+  },
+  teamLeaveButtonText: {
+    fontFamily: 'Inter_18pt-Medium',
+    fontSize: 16,
+    color: '#333',
+  },
+  
+  // Team Management Styles
+  teamManagementContainer: {
+    padding: 16,
+  },
+  teamManagementHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    marginBottom: 24,
+  },
+  teamManagementColorIndicator: {
+    width: 6,
+    height: 60,
+    borderRadius: 3,
+    marginRight: 16,
+  },
+  teamManagementInfo: {
+    flex: 1,
+  },
+  teamManagementName: {
+    fontFamily: 'Inter_18pt-Bold',
+    fontSize: 20,
+    color: '#333',
+    marginBottom: 8,
+  },
+  teamManagementDescription: {
+    fontFamily: 'Inter_18pt-Regular',
+    fontSize: 16,
+    color: '#666',
+    lineHeight: 24,
+  },
+  teamManagementSection: {
+    marginBottom: 24,
+  },
+  teamManagementSectionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  teamManagementSectionTitle: {
+    fontFamily: 'Inter_18pt-Bold',
+    fontSize: 16,
+    color: '#333',
+  },
+  addMemberButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#f0f0f0',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+  },
+  addMemberIcon: {
+    width: 16,
+    height: 16,
+    tintColor: '#333',
+    marginRight: 6,
+  },
+  addMemberButtonText: {
+    fontFamily: 'Inter_18pt-Medium',
+    fontSize: 14,
+    color: '#333',
+  },
+  teamManagementMembersList: {
+    gap: 8,
+  },
+  teamManagementMemberItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 12,
+    backgroundColor: '#f8f9fa',
+    borderRadius: 8,
+  },
+  teamManagementMemberAvatar: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#007AFF',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
+  },
+  teamManagementMemberAvatarText: {
+    fontFamily: 'Inter_18pt-Bold',
+    fontSize: 16,
+    color: '#fff',
+  },
+  teamManagementMemberInfo: {
+    flex: 1,
+  },
+  teamManagementMemberName: {
+    fontFamily: 'Inter_18pt-Medium',
+    fontSize: 16,
+    color: '#333',
+    marginBottom: 2,
+  },
+  teamManagementMemberRole: {
+    fontFamily: 'Inter_18pt-Regular',
+    fontSize: 12,
+    color: '#666',
+  },
+  removeMemberFromTeamButton: {
+    padding: 8,
+  },
+  removeMemberFromTeamIcon: {
+    width: 20,
+    height: 20,
+    tintColor: '#666',
+  },
+  teamManagementActions: {
+    marginTop: 24,
+  },
+  deleteTeamButton: {
+    backgroundColor: '#FF3B30',
+    paddingVertical: 15,
+    borderRadius: 10,
+    alignItems: 'center',
+  },
+  deleteTeamButtonText: {
+    fontFamily: 'Inter_18pt-Bold',
+    fontSize: 16,
+    color: '#fff',
+  },
+  
+  // Team Chat Styles
+  teamChatContainer: {
+    flex: 1,
+    backgroundColor: '#f8f9fa',
+  },
+  teamChatHeader: {
+    backgroundColor: '#fff',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e9ecef',
+  },
+  teamChatHeaderInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  teamChatColorIndicator: {
+    width: 4,
+    height: 30,
+    borderRadius: 2,
+    marginRight: 12,
+  },
+  teamChatInfo: {
+    flex: 1,
+  },
+  teamChatName: {
+    fontFamily: 'Inter_18pt-Bold',
+    fontSize: 16,
+    color: '#333',
+    marginBottom: 2,
+  },
+  teamChatMemberCount: {
+    fontFamily: 'Inter_18pt-Regular',
+    fontSize: 12,
+    color: '#666',
+  },
+  teamChatMessages: {
+    flex: 1,
+    paddingHorizontal: 16,
+  },
+  teamChatMessagesContent: {
+    paddingVertical: 16,
+  },
+  teamMessageContainer: {
+    marginBottom: 8,
+  },
+  teamMessage: {
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    padding: 8,
+    maxWidth: '80%',
+    alignSelf: 'flex-start',
+  },
+  teamMessageOwn: {
+    backgroundColor: '#007AFF',
+    alignSelf: 'flex-end',
+  },
+  teamMessageOwnText: {
+    color: '#fff',
+  },
+  teamMessageHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 6,
+  },
+  teamMessageSender: {
+    fontFamily: 'Inter_18pt-Bold',
+    fontSize: 12,
+    color: '#666',
+  },
+  teamMessageTime: {
+    fontFamily: 'Inter_18pt-Regular',
+    fontSize: 10,
+    color: '#999',
+  },
+  teamMessageContent: {
+    fontFamily: 'Inter_18pt-Regular',
+    fontSize: 14,
+    color: '#333',
+    lineHeight: 20,
+    marginBottom: 8,
+  },
+  teamMessageActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  teamMessageUpvoteButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  teamMessageUpvoteIcon: {
+    fontSize: 16,
+  },
+  teamMessageUpvoteCount: {
+    fontFamily: 'Inter_18pt-Medium',
+    fontSize: 12,
+    color: '#666',
+  },
+  teamMessageReplyButton: {
+    paddingVertical: 4,
+  },
+  teamMessageReplyText: {
+    fontFamily: 'Inter_18pt-Medium',
+    fontSize: 12,
+    color: '#007AFF',
+  },
+  teamMessageDeleteButton: {
+    padding: 4,
+  },
+  teamMessageDeleteIcon: {
+    width: 16,
+    height: 16,
+    tintColor: '#666',
+  },
+  teamMessageReplies: {
+    marginTop: 8,
+    marginLeft: 16,
+    gap: 8,
+  },
+  teamMessageReply: {
+    backgroundColor: '#f8f9fa',
+    borderRadius: 8,
+    padding: 8,
+  },
+  teamMessageReplyOwn: {
+    backgroundColor: '#E3F2FD',
+  },
+  teamMessageReplyHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 4,
+  },
+  teamMessageReplySender: {
+    fontFamily: 'Inter_18pt-Bold',
+    fontSize: 10,
+    color: '#666',
+  },
+  teamMessageReplyTime: {
+    fontFamily: 'Inter_18pt-Regular',
+    fontSize: 9,
+    color: '#999',
+  },
+  teamMessageReplyContent: {
+    fontFamily: 'Inter_18pt-Regular',
+    fontSize: 12,
+    color: '#333',
+    lineHeight: 16,
+    marginBottom: 6,
+  },
+  teamMessageReplyActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  teamMessageReplyUpvoteButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+  },
+  teamMessageReplyUpvoteIcon: {
+    fontSize: 14,
+  },
+  teamMessageReplyUpvoteCount: {
+    fontFamily: 'Inter_18pt-Medium',
+    fontSize: 10,
+    color: '#666',
+  },
+  teamMessageReplyDeleteButton: {
+    padding: 2,
+  },
+  teamMessageReplyDeleteIcon: {
+    width: 14,
+    height: 14,
+    tintColor: '#666',
+  },
+  teamReplyInputContainer: {
+    backgroundColor: '#fff',
+    borderTopWidth: 1,
+    borderTopColor: '#e9ecef',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+  },
+  teamReplyInputHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  teamReplyInputHeaderText: {
+    fontFamily: 'Inter_18pt-Medium',
+    fontSize: 12,
+    color: '#666',
+  },
+  teamReplyInputCancelButton: {
+    padding: 4,
+  },
+  teamReplyInputCancelIcon: {
+    width: 16,
+    height: 16,
+    tintColor: '#666',
+  },
+  teamReplyInputRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    gap: 8,
+  },
+  teamReplyInput: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: '#ddd',
+    borderRadius: 8,
+    padding: 8,
+    fontSize: 14,
+    fontFamily: 'Inter_18pt-Regular',
+    backgroundColor: '#fff',
+    maxHeight: 80,
+  },
+  teamReplySendButton: {
+    backgroundColor: '#007AFF',
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  teamReplySendButtonDisabled: {
+    backgroundColor: '#f0f0f0',
+  },
+  teamReplySendIcon: {
+    width: 20,
+    height: 20,
+    tintColor: '#fff',
+  },
+  teamChatInputContainer: {
+    backgroundColor: '#fff',
+    borderTopWidth: 1,
+    borderTopColor: '#e9ecef',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    gap: 8,
+  },
+  teamChatInput: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: '#ddd',
+    borderRadius: 8,
+    padding: 12,
+    fontSize: 16,
+    fontFamily: 'Inter_18pt-Regular',
+    backgroundColor: '#fff',
+    maxHeight: 100,
+  },
+  teamChatSendButton: {
+    backgroundColor: '#007AFF',
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  teamChatSendButtonDisabled: {
+    backgroundColor: '#f0f0f0',
+  },
+  teamChatSendIcon: {
+    width: 24,
+    height: 24,
+    tintColor: '#fff',
+  },
+  
+  // Modal Styles
+  modalOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 1000,
+  },
+  modalContent: {
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    width: '90%',
+    maxHeight: '80%',
+    padding: 16,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  modalTitle: {
+    fontFamily: 'Inter_18pt-Bold',
+    fontSize: 18,
+    color: '#333',
+  },
+  modalCloseButton: {
+    padding: 8,
+  },
+  modalCloseIcon: {
+    width: 20,
+    height: 20,
+    tintColor: '#666',
+  },
+  memberList: {
+    maxHeight: 300,
+  },
+  memberItem: {
+    padding: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f0f0f0',
+  },
+  memberItemSelected: {
+    backgroundColor: '#E3F2FD',
+  },
+  memberItemContent: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  memberItemName: {
+    fontFamily: 'Inter_18pt-Medium',
+    fontSize: 16,
+    color: '#333',
+  },
+  memberItemCheckmark: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: '#007AFF',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  memberItemCheckmarkText: {
+    fontFamily: 'Inter_18pt-Bold',
+    fontSize: 12,
     color: '#fff',
   },
 });

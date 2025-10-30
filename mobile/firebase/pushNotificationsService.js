@@ -29,7 +29,14 @@ export const registerForPushNotifications = async () => {
     let finalStatus = existingStatus;
     
     if (existingStatus !== 'granted') {
-      const { status } = await Notifications.requestPermissionsAsync();
+      const { status } = await Notifications.requestPermissionsAsync({
+        ios: {
+          allowAlert: true,
+          allowBadge: true,
+          allowSound: true,
+          allowAnnouncements: true,
+        },
+      });
       finalStatus = status;
     }
     
@@ -51,10 +58,15 @@ export const registerForPushNotifications = async () => {
     // Set up notification channel for Android
     if (Platform.OS === 'android') {
       await Notifications.setNotificationChannelAsync('default', {
-        name: 'default',
+        name: 'ITUFK Bildirimleri',
+        description: 'ITUFK uygulamasından gelen bildirimler',
         importance: Notifications.AndroidImportance.MAX,
         vibrationPattern: [0, 250, 250, 250],
-        lightColor: '#FF231F7C',
+        lightColor: '#FF6B00',
+        sound: 'default',
+        enableVibrate: true,
+        enableLights: true,
+        showBadge: true,
       });
     }
 

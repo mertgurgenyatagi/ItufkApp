@@ -1,5 +1,6 @@
 import { collection, getDocs, query, orderBy, onSnapshot, addDoc, deleteDoc, doc, where, updateDoc } from 'firebase/firestore';
 import { db } from './config';
+import { getUserPushTokens, sendPushNotification } from './pushNotificationsService';
 
 /**
  * Get all notifications for a user
@@ -53,7 +54,7 @@ export const subscribeToNotifications = (userId, callback) => {
 };
 
 /**
- * Create a notification
+ * Create a notification and send push notification
  */
 export const createNotification = async (notificationData) => {
   try {
@@ -62,6 +63,28 @@ export const createNotification = async (notificationData) => {
       createdAt: new Date().toISOString(),
       read: false
     });
+    
+    // Send push notification
+    try {
+      const pushTokens = await getUserPushTokens([notificationData.userId]);
+      if (pushTokens.length > 0) {
+        await sendPushNotification(
+          pushTokens,
+          notificationData.title,
+          notificationData.message,
+          {
+            type: notificationData.type,
+            notificationId: docRef.id,
+            ...(notificationData.relatedId && { 
+              [notificationData.relatedType === 'message' ? 'messageId' : 'eventId']: notificationData.relatedId 
+            })
+          }
+        );
+      }
+    } catch (pushError) {
+      console.error('Error sending push notification:', pushError);
+      // Don't throw - notification was still created in Firestore
+    }
     
     return docRef.id;
   } catch (error) {
@@ -263,6 +286,144 @@ export const notifyEventAnnouncementReminder = async (captainId, coCaptainId, ev
     await Promise.all(notifications);
   } catch (error) {
     console.error('Error creating announcement reminder:', error);
+  }
+};
+
+/**
+ * Create notification for WhatsApp announcement reminder
+ * Only creates if one doesn't already exist for today
+ */
+export const notifyWhatsAppAnnouncementReminder = async (captainId, coCaptainId, eventData, daysRemaining) => {
+  try {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const todayStr = today.toISOString().split('T')[0]; // YYYY-MM-DD format
+    
+    const notifications = [];
+    
+    // Helper to check if notification already sent today
+    const shouldNotify = async (userId) => {
+      const userNotifs = query(
+        collection(db, 'notifications'),
+        where('userId', '==', userId),
+        where('type', '==', 'whatsapp_announcement'),
+        where('relatedId', '==', eventData.eventId)
+      );
+      
+      const snapshot = await getDocs(userNotifs);
+      
+      // Check if any notification was created today
+      for (const doc of snapshot.docs) {
+        const notifDate = new Date(doc.data().createdAt);
+        notifDate.setHours(0, 0, 0, 0);
+        const notifDateStr = notifDate.toISOString().split('T')[0];
+        
+        if (notifDateStr === todayStr) {
+          return false; // Already sent today
+        }
+      }
+      
+      return true; // No notification sent today
+    };
+    
+    if (captainId && await shouldNotify(captainId)) {
+      notifications.push(
+        createNotification({
+          userId: captainId,
+          type: 'whatsapp_announcement',
+          title: 'WhatsApp Duyuru Hatırlatması: ' + eventData.name,
+          message: `${daysRemaining} gün kaldı ve WhatsApp duyurusu henüz yapılmadı!`,
+          relatedId: eventData.eventId,
+          relatedType: 'event'
+        })
+      );
+    }
+    
+    if (coCaptainId && coCaptainId !== captainId && await shouldNotify(coCaptainId)) {
+      notifications.push(
+        createNotification({
+          userId: coCaptainId,
+          type: 'whatsapp_announcement',
+          title: 'WhatsApp Duyuru Hatırlatması: ' + eventData.name,
+          message: `${daysRemaining} gün kaldı ve WhatsApp duyurusu henüz yapılmadı!`,
+          relatedId: eventData.eventId,
+          relatedType: 'event'
+        })
+      );
+    }
+    
+    await Promise.all(notifications);
+  } catch (error) {
+    console.error('Error creating WhatsApp announcement reminder:', error);
+  }
+};
+
+/**
+ * Create notification for Instagram announcement reminder
+ * Only creates if one doesn't already exist for today
+ */
+export const notifyInstagramAnnouncementReminder = async (captainId, coCaptainId, eventData, daysRemaining) => {
+  try {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const todayStr = today.toISOString().split('T')[0]; // YYYY-MM-DD format
+    
+    const notifications = [];
+    
+    // Helper to check if notification already sent today
+    const shouldNotify = async (userId) => {
+      const userNotifs = query(
+        collection(db, 'notifications'),
+        where('userId', '==', userId),
+        where('type', '==', 'instagram_announcement'),
+        where('relatedId', '==', eventData.eventId)
+      );
+      
+      const snapshot = await getDocs(userNotifs);
+      
+      // Check if any notification was created today
+      for (const doc of snapshot.docs) {
+        const notifDate = new Date(doc.data().createdAt);
+        notifDate.setHours(0, 0, 0, 0);
+        const notifDateStr = notifDate.toISOString().split('T')[0];
+        
+        if (notifDateStr === todayStr) {
+          return false; // Already sent today
+        }
+      }
+      
+      return true; // No notification sent today
+    };
+    
+    if (captainId && await shouldNotify(captainId)) {
+      notifications.push(
+        createNotification({
+          userId: captainId,
+          type: 'instagram_announcement',
+          title: 'Instagram Duyuru Hatırlatması: ' + eventData.name,
+          message: `${daysRemaining} gün kaldı ve Instagram duyurusu henüz yapılmadı!`,
+          relatedId: eventData.eventId,
+          relatedType: 'event'
+        })
+      );
+    }
+    
+    if (coCaptainId && coCaptainId !== captainId && await shouldNotify(coCaptainId)) {
+      notifications.push(
+        createNotification({
+          userId: coCaptainId,
+          type: 'instagram_announcement',
+          title: 'Instagram Duyuru Hatırlatması: ' + eventData.name,
+          message: `${daysRemaining} gün kaldı ve Instagram duyurusu henüz yapılmadı!`,
+          relatedId: eventData.eventId,
+          relatedType: 'event'
+        })
+      );
+    }
+    
+    await Promise.all(notifications);
+  } catch (error) {
+    console.error('Error creating Instagram announcement reminder:', error);
   }
 };
 
